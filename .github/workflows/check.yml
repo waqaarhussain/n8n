@@ -16,7 +16,15 @@ jobs:
       - run: POSTGRES_PASSWORD=test N8N_ENCRYPTION_KEY=test N8N_IMAGE=docker.n8n.io/n8nio/n8n:stable docker compose config --quiet
       - run: docker build -t school-bridge-test bridge
       - name: Validate public-IP HTTPS configuration
-        run: docker run --rm -e N8N_HOST=8.8.8.8 -v "$PWD/Caddyfile.ip:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate > /dev/null
+        run: docker run --rm -e N8N_HOST=8.8.8.8 -v "$PWD/Caddyfile.ip:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate > /tmp/caddy-ip.json
+      - name: Verify TLS certificate selection without SNI
+        run: |
+          python - <<'PYCODE'
+          import json
+          config = json.load(open('/tmp/caddy-ip.json'))
+          policies = [p for server in config['apps']['http']['servers'].values() for p in server.get('tls_connection_policies', [])]
+          assert any(p.get('default_sni') == '8.8.8.8' for p in policies), policies
+          PYCODE
       - name: Verify setup saves through a writable mount
         env:
           POSTGRES_PASSWORD: test
