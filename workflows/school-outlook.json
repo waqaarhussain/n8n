@@ -1,0 +1,164 @@
+{
+  "id": "WaqaarSchoolEmailV1",
+  "name": "School email → iCloud + WhatsApp",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "event": "messageReceived",
+        "output": "raw",
+        "filters": {
+          "foldersToInclude": [
+            "SELECT_SHRUBBERY_FOLDER"
+          ],
+          "readStatus": "both"
+        },
+        "options": {
+          "downloadAttachments": false
+        }
+      },
+      "id": "outlook-school",
+      "name": "Watch Shrubbery folder",
+      "type": "n8n-nodes-base.microsoftOutlookTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://school-bridge:8080/process",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "school-process",
+      "name": "Extract events, deduplicate, save and notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "review-needed",
+              "leftValue": "={{ $json.status === 'review' || $json.uncertain_deliveries > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-review",
+      "name": "Needs your attention?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $json.reason || 'WhatsApp delivery is uncertain. Check InOut before retrying.' }}"
+      },
+      "id": "review-error",
+      "name": "Review email or delivery",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        880,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Setup before publishing\n1. Connect your personal Outlook OAuth2 credential.\n2. Select ONLY the Shrubbery folder in Folders to Include. Replace the placeholder.\n3. Keep Output = Raw and Read Status = both.\n4. Run n8n-setup on the server for iCloud, AI and InOut.\n5. Publish after a single controlled test.\n\nChecks every minute; not instant push. Only new arrivals after publication. Full email text is sent in chunks if needed. Attachments are not read.",
+        "height": 370,
+        "width": 430
+      },
+      "id": "instructions",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -30,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "Watch Shrubbery folder": {
+      "main": [
+        [
+          {
+            "node": "Extract events, deduplicate, save and notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract events, deduplicate, save and notify": {
+      "main": [
+        [
+          {
+            "node": "Needs your attention?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs your attention?": {
+      "main": [
+        [
+          {
+            "node": "Review email or delivery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/London",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "versionId": "553a4064-67c2-4585-8d04-d66d3adb729f",
+  "pinData": {},
+  "tags": []
+}

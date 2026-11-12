@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $EUID -ne 0 ]]; then exec sudo "$0" "$@"; fi
+cd -- "$(cat /etc/waqaar-n8n.path)"
+exec 9>/var/lock/waqaar-n8n.lock
+flock -n 9 || { echo 'Another n8n maintenance command is running.' >&2; exit 1; }
+cmd=${1:-update}
+[[ $(basename "$0") == n8n-setup ]] && cmd=setup
+backup() {
+  local target="$PWD/backups/$(date -u +%Y%m%dT%H%M%SZ)"
+  install -d -m 700 "$target"
+  docker compose stop n8n school-bridge
+  trap 'docker compose up -d >/dev/null' EXIT
+  docker compose exec -T postgres pg_dump -U n8n -d n8n -Fc > "$target/n8n.dump"
+  cp .env "$target/env"
+  cp -a config data "$target/"
+  docker compose run --rm --no-deps --user 0 --entrypoint sh -v "$target:/backup" n8n -c 'tar czf /backup/n8n-data.tgz -C /home/node/.n8n .'
+  git rev-parse HEAD > "$target/commit"
+  chmod -R go-rwx "$target"
+  docker compose up -d --wait --wait-timeout 180
+  trap - EXIT
+  echo "Backup: $target (contains credentials; keep private)."
+}
+case "$cmd" in
+  update)
+    [[ -z $(git status --porcelain --untracked-files=no) ]] || { echo 'Tracked local edits found; commit or stash them first.'; exit 1; }
+    backup
+    git pull --ff-only origin main
+    docker compose config --quiet
+    docker compose build school-bridge
+    docker compose up -d --wait --wait-timeout 180
+    install -m 755 scripts/n8n-live /usr/local/bin/n8n-live
+    echo 'Updated. Your configured credentials, database and edited workflows are preserved.'
+    ;;
+  backup) backup ;;
+  setup)
+    docker compose run --rm --no-deps --user 0:0 -v "$PWD/config:/config" school-bridge python setup.py
+    chown root:1000 config/settings.json
+    chmod 640 config/settings.json
+    docker compose restart school-bridge
+    ;;
+  check-icloud) docker compose exec -T school-bridge python setup.py --check ;;
+  import) docker compose exec -T n8n n8n import:workflow --input=/workflows/school-outlook.json ;;
+  status) docker compose ps ;;
+  logs) docker compose logs --tail=80 n8n school-bridge ;;
+  upgrade-engine)
+    backup
+    docker pull docker.n8n.io/n8nio/n8n:stable
+    image_ref=$(docker image inspect docker.n8n.io/n8nio/n8n:stable --format '{{index .RepoDigests 0}}')
+    python3 scripts/environment.py --image "$image_ref"
+    docker compose up -d --wait --wait-timeout 180
+    ;;
+  *) echo 'Usage: n8n-live {update|backup|setup|check-icloud|import|status|logs|upgrade-engine}'; exit 2 ;;
+esac

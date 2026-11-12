@@ -1,0 +1,17 @@
+name: Checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r bridge/requirements.txt pytest
+      - run: python -m pytest -q
+      - run: bash -n bootstrap.sh install.sh scripts/n8n-live
+      - run: POSTGRES_PASSWORD=test N8N_ENCRYPTION_KEY=test N8N_IMAGE=docker.n8n.io/n8nio/n8n:stable docker compose config --quiet
+      - run: docker build -t school-bridge-test bridge
