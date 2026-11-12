@@ -17,3 +17,11 @@ jobs:
       - run: docker build -t school-bridge-test bridge
       - name: Validate public-IP HTTPS configuration
         run: docker run --rm -e N8N_HOST=8.8.8.8 -v "$PWD/Caddyfile.ip:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate > /dev/null
+      - name: Verify setup saves through a writable mount
+        env:
+          POSTGRES_PASSWORD: test
+          N8N_ENCRYPTION_KEY: test
+          N8N_IMAGE: docker.n8n.io/n8nio/n8n:stable
+        run: |
+          mkdir -p config data
+          docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 --build school-bridge python -c 'from setup import save; from app import CONFIG; import json; save({"smoke_test": True}); assert json.loads(CONFIG.read_text())["smoke_test"] is True'

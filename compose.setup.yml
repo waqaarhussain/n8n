@@ -1,0 +1,8 @@
+# Apply only to interactive setup. Runtime config remains read-only.
+services:
+  school-bridge:
+    volumes:
+      - type: bind
+        source: ./config
+        target: /config
+        read_only: false

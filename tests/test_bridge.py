@@ -246,3 +246,24 @@ def test_public_ip_web_ui_keeps_secure_cookies_and_backend_private():
         env.web_settings('192.168.1.2')
     with pytest.raises(ValueError):
         env.web_settings('8.8.8.8;bad')
+
+
+def test_api_key_preview_is_masked_and_password_stays_hidden(monkeypatch, capsys):
+    import importlib.util
+    root=Path(__file__).resolve().parents[1]
+    spec=importlib.util.spec_from_file_location('school_setup',root/'bridge/setup.py')
+    setup=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(setup)
+    key='sk-example-secret-1234'
+    monkeypatch.setattr(setup.getpass,'getpass',lambda _:key)
+    assert setup.secret('API key',preview=True)==key
+    output=capsys.readouterr().out
+    assert key not in output
+    assert 'sk-e' in output and '1234' in output
+    setup.secret('Apple password')
+    assert capsys.readouterr().out==''
+    monkeypatch.setattr(setup.getpass,'getpass',lambda _:'')
+    assert setup.secret('Keep key',key,preview=True)==key
+    assert key not in capsys.readouterr().out
+    for short in ('123','123456','12345678'):
+        assert short not in setup.mask_key(short)

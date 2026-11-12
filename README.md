@@ -36,7 +36,7 @@ The installer clones to `/opt/waqaar-n8n`, installs Ubuntu's Docker packages if 
 5. **iCloud Mail primary address and forwarding alias**. The wizard checks IMAP login without changing messages. An alias shares the primary mailbox; use the primary iCloud Mail address to authenticate. iCloud Mail can remain disabled in the phone Mail app.
 6. **InOut API keys**, one per recipient. Each person sends `Create APIKey` to the InOut WhatsApp bot in their own chat. InOut's allowance/subscription is separate. HTTP acceptance does not prove delivery. Multiple-recipient delivery and provider-added message introductions are not verified until you test them.
 
-The setup wizard lists calendars but does not write a test event or send WhatsApp messages.
+The setup wizard lists calendars but does not write a test event or send WhatsApp messages. API key prompts show a masked first/last-character confirmation after entry; Apple passwords remain hidden. Short keys are masked more heavily. InOut identifies your connected WhatsApp number from its API key, so there is no separate recipient phone-number field.
 
 For local access, run this **on your computer**, keeping SSH open:
 

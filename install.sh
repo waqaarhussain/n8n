@@ -34,7 +34,7 @@ docker compose config --quiet
 docker compose build school-bridge
 # The wizard verifies iCloud and writes a selected calendar URL. Secrets stay local.
 if [[ ! -f config/settings.json ]]; then
-  docker compose run --rm --no-deps --user 0:0 -v "$PWD/config:/config" school-bridge python setup.py
+  docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 school-bridge python setup.py
 fi
 chmod 640 config/settings.json
 chown root:1000 config/settings.json

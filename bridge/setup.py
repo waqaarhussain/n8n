@@ -15,8 +15,21 @@ def ask(label, old=''):
     return value or old
 
 
-def secret(label, old=''):
-    return getpass.getpass(label + (' [Enter keeps saved value]' if old else '') + ': ').strip() or old
+def mask_key(value):
+    if not value:
+        return '(not entered)'
+    if len(value) >= 16:
+        return value[:4] + '…' + value[-4:] + f' ({len(value)} characters)'
+    if len(value) >= 8:
+        return value[:2] + '…' + value[-2:] + f' ({len(value)} characters)'
+    return '•' * len(value) + f' ({len(value)} characters)'
+
+
+def secret(label, old='', preview=False):
+    value = getpass.getpass(label + (' [Enter keeps saved value]' if old else '') + ': ').strip() or old
+    if preview:
+        print('Key received: ' + mask_key(value))
+    return value
 
 
 def save(settings):
@@ -109,20 +122,25 @@ def main():
                     pass
     ai = settings.get('ai', {})
     print('\nEvent extraction uses the OpenAI API, billed separately from ChatGPT Plus.')
-    key = secret('OpenAI API key (blank leaves extraction unconfigured)', ai.get('api_key', ''))
+    key = secret('OpenAI API key (blank leaves extraction unconfigured)', ai.get('api_key', ''), preview=True)
     model = ask('OpenAI model', ai.get('model', 'gpt-4.1-mini'))
     settings['ai'] = {'api_key': key, 'model': model}
     settings['default_duration_minutes'] = 60
     settings.setdefault('allowed_senders', [])
     print('\nInOut WhatsApp. Each recipient generates their own key by messaging Create APIKey to the bot.')
     recipients = settings.get('inout', {}).get('recipients', [])
+    for recipient in recipients:
+        print('Saved recipient: ' + recipient.get('label', 'Unnamed') + ' | ' + mask_key(recipient.get('api_key', '')))
     if recipients and ask('Replace saved recipient list? y/n', 'n').lower() == 'y':
         recipients = []
     while ask('Add a WhatsApp recipient? y/n', 'y' if not recipients else 'n').lower() == 'y':
         label = ask('Recipient label (e.g. Me)')
-        recipient_key = secret('Their InOut API key')
+        recipient_key = secret('Their InOut API key', preview=True)
         if recipient_key:
-            recipients.append({'label': label, 'api_key': recipient_key})
+            if any(r.get('api_key') == recipient_key for r in recipients):
+                print('That recipient key is already configured; not added twice.')
+            else:
+                recipients.append({'label': label, 'api_key': recipient_key})
     settings['inout'] = {'recipients': recipients, 'chunk_size': 350}
     save(settings)
     print('\nSaved. iCloud discovery passed; calendar write and WhatsApp delivery still need a live test.')
