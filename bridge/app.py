@@ -1,6 +1,7 @@
 """Private Docker-network bridge: email -> validated event(s) -> iCloud + InOut.
 No editor routes, credentials or bridge ports are exposed to the public internet.
 """
+from email.utils import getaddresses
 import hashlib
 import html
 import json
@@ -122,6 +123,37 @@ def normalise_email(data):
         raise ValueError('Email body exceeds 120,000 characters; review it manually.')
     reference = str(data.get('receivedDateTime') or data.get('date') or datetime.now(timezone.utc).isoformat())
     return subject, body, reference
+
+
+
+def alias_matches(data, alias):
+    """Match the actual To/Cc address fields, never body text or a substring."""
+    if not alias:
+        return False
+    addresses = []
+    def collect(value):
+        if isinstance(value, str):
+            addresses.extend(address.casefold() for _, address in getaddresses([value]))
+        elif isinstance(value, list):
+            for part in value:
+                collect(part)
+        elif isinstance(value, dict):
+            if value.get('address'):
+                collect(value['address'])
+            elif value.get('emailAddress'):
+                collect(value['emailAddress'])
+            elif value.get('value'):
+                collect(value['value'])
+            elif value.get('text'):
+                collect(value['text'])
+    for field in ('to', 'cc', 'toRecipients', 'ccRecipients'):
+        collect(data.get(field))
+    headers = data.get('headers', {})
+    if isinstance(headers, dict):
+        for key, value in headers.items():
+            if key.lower() in ('to', 'cc'):
+                collect(value)
+    return alias.strip().casefold() in addresses
 
 
 def fingerprint(subject, body):
@@ -300,6 +332,13 @@ def notify(db, settings, mail_id, title, body):
 
 def process(data, settings=None):
     settings = settings if settings is not None else config()
+    mail_settings = settings.get('mail', {})
+    if mail_settings.get('mode') == 'icloud_alias':
+        alias = mail_settings.get('alias', '')
+        if not alias:
+            raise ValueError('Automation alias missing. Run n8n-setup.')
+        if not alias_matches(data, alias):
+            return {'status': 'ignored', 'reason': 'Email is not addressed to the configured automation alias'}
     title, body, reference = normalise_email(data)
     # Folder selection in n8n is mandatory. Optional sender allowlist adds another boundary.
     allowed = [v.casefold() for v in settings.get('allowed_senders', [])]

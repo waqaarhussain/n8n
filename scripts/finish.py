@@ -4,7 +4,7 @@ print('\nInstalled. Open ' + values['N8N_PUBLIC_URL'] + ' and create your n8n ow
 if values['N8N_PROTOCOL'] == 'http':
     print('From your computer: ssh -L 5678:127.0.0.1:5678 YOUR_SSH_USER@YOUR_SERVER')
 print('Then run: sudo n8n-live import')
-print('Open the imported workflow, connect Outlook and select ONLY the Shrubbery folder.')
+print('Open the imported workflow, verify the imported iCloud alias, test once, then publish.')
 print('Configure both folder and read-status filters before publishing. See README.md.')
 print('Update: n8n-live update (or update-live if this server had no existing update-live).')
 print('Reconfigure iCloud/AI/WhatsApp: n8n-setup')

@@ -1,0 +1,155 @@
+{
+  "id": "SchoolIcloudMailV1",
+  "name": "School email via iCloud alias → iCloud Calendar + WhatsApp",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "nothing",
+        "downloadAttachments": false,
+        "format": "simple",
+        "options": {
+          "customEmailConfig": "[\"ALL\", [\"TO\", \"YOUR_N8N_ALIAS@icloud.com\"]]",
+          "forceReconnect": 60,
+          "trackLastMessageId": true
+        }
+      },
+      "id": "icloud-school",
+      "name": "Watch iCloud school alias",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://school-bridge:8080/process",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "school-process",
+      "name": "Extract events, deduplicate, save and notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "review-needed",
+              "leftValue": "={{ $json.status === 'review' || $json.uncertain_deliveries > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-review",
+      "name": "Needs your attention?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        600,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ $json.reason || 'WhatsApp delivery is uncertain. Check InOut before retrying.' }}"
+      },
+      "id": "review-error",
+      "name": "Review email or delivery",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        880,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## iCloud Mail setup before publishing\n1. Create an IMAP credential: PRIMARY iCloud Mail address, app-specific password, imap.mail.me.com, port 993, SSL/TLS enabled.\n2. Replace YOUR_N8N_ALIAS@icloud.com in Custom Email Rules with your automation alias.\n3. Run n8n-setup on your server and enter that same alias.\n4. Keep Format=Simple; Action=Nothing.\n5. Outlook rule forwards only school messages to the alias.\n\nNo Microsoft app registration. The alias shares your primary mailbox. Mail need not be enabled in the phone app. IMAP listens for arrivals; delivery timing depends on both providers. Initial activation can include matching mail from today. Test with a disposable message.",
+        "height": 370,
+        "width": 430
+      },
+      "id": "instructions",
+      "name": "Setup notes",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -30,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "Extract events, deduplicate, save and notify": {
+      "main": [
+        [
+          {
+            "node": "Needs your attention?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs your attention?": {
+      "main": [
+        [
+          {
+            "node": "Review email or delivery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Watch iCloud school alias": {
+      "main": [
+        [
+          {
+            "node": "Extract events, deduplicate, save and notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/London",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "versionId": "64cbb1ab-f39f-4730-81fa-b27586f55b57",
+  "pinData": {},
+  "tags": []
+}

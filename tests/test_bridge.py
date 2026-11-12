@@ -171,3 +171,78 @@ def test_workflow_folder_placeholder_and_raw():
     assert node['parameters']['filters']['readStatus']=='both'
     assert node['parameters']['filters']['foldersToInclude']==['SELECT_SHRUBBERY_FOLDER']
     assert not workflow['active']
+
+
+def test_alias_exact_address_matching():
+    alias='automation@icloud.com'
+    assert app.alias_matches({'to':'Parent <automation@icloud.com>'}, alias)
+    assert app.alias_matches({'to':{'value':[{'address':'automation@icloud.com'}]}},alias)
+    assert app.alias_matches({'headers':{'To':'automation@icloud.com'}},alias)
+    assert not app.alias_matches({'to':'notautomation@icloud.com'},alias)
+    assert not app.alias_matches({'body':'automation@icloud.com'},alias)
+    assert not app.alias_matches({'to':'main@icloud.com'},alias)
+    assert not app.alias_matches({'to':'automation@icloud.com'},'')
+
+
+def test_other_icloud_mail_ignored_before_ai_and_calendar(state,monkeypatch):
+    extract=MagicMock()
+    monkeypatch.setattr(app,'extract',extract)
+    result=app.process({'subject':'Private','textPlain':'Other email','to':'main@icloud.com'},
+                       {'mail':{'mode':'icloud_alias','alias':'automation@icloud.com'}})
+    assert result['status']=='ignored'
+    extract.assert_not_called()
+
+
+def test_icloud_alias_workflow_is_scoped_and_inactive():
+    workflow=json.loads((Path(__file__).resolve().parents[1]/'workflows/school-icloud.json').read_text())
+    node=workflow['nodes'][0]
+    assert node['type']=='n8n-nodes-base.emailReadImap'
+    assert node['parameters']['format']=='simple'
+    assert node['parameters']['postProcessAction']=='nothing'
+    assert json.loads(node['parameters']['options']['customEmailConfig']) == ['ALL',['TO','YOUR_N8N_ALIAS@icloud.com']]
+    assert not workflow['active']
+
+
+def test_import_renders_alias_and_keeps_secrets_out_of_workflow(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    root=Path(__file__).resolve().parents[1]
+    spec=importlib.util.spec_from_file_location('import_school',root/'scripts/import-school.py')
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    (tmp_path/'config').mkdir()
+    (tmp_path/'workflows').mkdir()
+    (tmp_path/'config/settings.json').write_text(json.dumps({'mail':{'mode':'icloud_alias',
+        'alias':'automation@icloud.com','username':'primary@icloud.com','password':'secret-test-value'}}))
+    (tmp_path/'workflows/school-icloud.json').write_text((root/'workflows/school-icloud.json').read_text())
+    calls=[]
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(module,'run',lambda *args,**kw:calls.append((args,kw)))
+    module.main()
+    payloads=[json.loads(kw['input']) for _,kw in calls if 'input' in kw]
+    assert payloads[0][0]['data']['password']=='secret-test-value'
+    assert 'secret-test-value' not in json.dumps(payloads[1])
+    trigger=payloads[1]['nodes'][0]
+    assert json.loads(trigger['parameters']['options']['customEmailConfig']) == ['ALL',['TO','automation@icloud.com']]
+    assert trigger['credentials']['imap']['id']=='SchoolIcloudImap'
+    assert not payloads[1]['active']
+    assert 'secret-test-value' not in capsys.readouterr().out
+    assert calls[-1][0][5:7] == ('rm','-f')
+
+
+def test_public_ip_web_ui_keeps_secure_cookies_and_backend_private():
+    import importlib.util
+    root=Path(__file__).resolve().parents[1]
+    spec=importlib.util.spec_from_file_location('environment',root/'scripts/environment.py')
+    env=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(env)
+    settings=env.web_settings('8.8.8.8')
+    assert settings['N8N_PUBLIC_URL']=='https://8.8.8.8'
+    assert settings['CADDY_CONFIG']=='Caddyfile.ip'
+    assert settings['N8N_SECURE_COOKIE']=='true'
+    assert settings['N8N_BIND']=='127.0.0.1'
+    assert env.web_settings('n8n.example.com')['CADDY_CONFIG']=='Caddyfile'
+    assert env.web_settings('')['COMPOSE_PROFILES']==''
+    with pytest.raises(ValueError):
+        env.web_settings('192.168.1.2')
+    with pytest.raises(ValueError):
+        env.web_settings('8.8.8.8;bad')

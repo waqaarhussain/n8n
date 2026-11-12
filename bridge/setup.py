@@ -1,6 +1,8 @@
 """Interactive server-only setup. Never send credentials to GitHub or chat."""
 import argparse
 import getpass
+import imaplib
+import re
 import json
 import os
 from pathlib import Path
@@ -74,6 +76,37 @@ def main():
         finally:
             if client:
                 client.close()
+    print('\niCloud Mail receives forwarded school emails. Your alias shares the primary mailbox.')
+    print('Use the PRIMARY iCloud Mail address for login, not the automation alias.')
+    old_mail = settings.get('mail', {})
+    while True:
+        mail_user = ask('Primary iCloud Mail address', old_mail.get('username', username if username.lower().endswith(('@icloud.com', '@me.com', '@mac.com')) else ''))
+        alias = ask('Automation alias that Outlook will forward to', old_mail.get('alias', ''))
+        if not re.fullmatch(r'[^\s@]+@icloud\.com', alias, re.I):
+            print('Enter your automation alias ending @icloud.com.')
+            continue
+        mail_password = secret('iCloud Mail app-specific password', old_mail.get('password', password))
+        connection = None
+        try:
+            connection = imaplib.IMAP4_SSL('imap.mail.me.com', 993, timeout=30)
+            connection.login(mail_user, mail_password)
+            status, _ = connection.select('INBOX', readonly=True)
+            if status != 'OK':
+                raise ValueError('Cannot open INBOX')
+            settings['mail'] = {'mode': 'icloud_alias', 'username': mail_user,
+                                'password': mail_password, 'alias': alias.lower()}
+            print('IMAP login and read-only INBOX check passed. No messages changed.')
+            break
+        except Exception as exc:
+            print(f'iCloud Mail check failed ({type(exc).__name__}). Check primary address and app-specific password.')
+            if ask('Try again? y/n', 'y').lower() != 'y':
+                raise SystemExit('Setup stopped. Existing settings have not been changed.')
+        finally:
+            if connection:
+                try:
+                    connection.logout()
+                except Exception:
+                    pass
     ai = settings.get('ai', {})
     print('\nEvent extraction uses the OpenAI API, billed separately from ChatGPT Plus.')
     key = secret('OpenAI API key (blank leaves extraction unconfigured)', ai.get('api_key', ''))

@@ -74,7 +74,7 @@ services:
       N8N_HOST: ${N8N_HOST:-localhost}
     ports: ['80:80', '443:443', '443:443/udp']
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./${CADDY_CONFIG:-Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     networks: [backend]

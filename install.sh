@@ -46,5 +46,8 @@ elif [[ $(readlink -f /usr/local/bin/update-live) != /usr/local/bin/n8n-live ]];
   echo 'Existing update-live command kept. Use n8n-live update for this project.'
 fi
 ln -sf /usr/local/bin/n8n-live /usr/local/bin/n8n-setup
+if grep -qx 'COMPOSE_PROFILES=https' .env; then
+  docker compose pull caddy
+fi
 docker compose up -d --wait --wait-timeout 180
 python3 scripts/finish.py
