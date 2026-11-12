@@ -304,3 +304,34 @@ def test_inout_uses_documented_get_query(monkeypatch):
     client.get.assert_called_once_with('https://api.inout.bot/send',
         params={'apikey': key, 'message': 'School email & test'})
     client.post.assert_not_called()
+
+
+def test_notification_removes_school_signature_legal_footer_and_separators():
+    body = """________________________
+Good afternoon.
+Please complete the survey within seven days.
+https://example.com/survey
+Many thanks.
+Kind regards.
+The Shrubbery School Limited
+Walmley Ash Road
+Telephone: 01234
+The information contained in this email is confidential."""
+    cleaned = app.notification_body(body)
+    assert 'seven days' in cleaned and 'https://example.com/survey' in cleaned
+    assert all(value not in cleaned for value in ('_____', 'Limited', 'Telephone', 'confidential', 'Kind regards', 'Many thanks'))
+    assert 'Telephone' in body  # source text remains intact for extraction
+
+
+def test_chunks_do_not_break_long_url_near_boundary():
+    url = 'https://docs.google.com/forms/d/e/' + 'a' * 170 + '/viewform'
+    text = 'Email From School\n\nSubject: Survey\n\n' + 'Some text. ' * 10 + url + '\nPlease respond.'
+    pieces = app.chunks(text)
+    assert ''.join(pieces) == text
+    assert any(url in piece for piece in pieces)
+    assert all(len(piece) <= 350 for piece in pieces)
+
+
+def test_notification_preserves_real_body_dates_and_signoff_in_prose():
+    text = 'Kind regards are appreciated.\nPlease attend on 10 December at 2.15pm.\nBring a signed form.'
+    assert app.notification_body(text) == text

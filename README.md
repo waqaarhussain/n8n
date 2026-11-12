@@ -154,3 +154,5 @@ Tests cover forwarding-header cleanup, complete Outlook bodies, event timing, Lo
 The prepared code has local automated tests. Ubuntu deployment, iCloud Mail login, iCloud writes and InOut handset delivery must be verified on the actual server/accounts.
 
 WhatsApp diagnostics: processing responses include `whatsapp_errors` with redacted provider errors. Older uncertain sends have no saved error detail. Use `n8n-live check-whatsapp` to send a fresh short test without reprocessing email or creating calendar events. It uses the provider message allowance. A successful request is not a delivery receipt.
+
+Notification cleanup removes standalone forwarding separators, the Shrubbery School Limited signature block and recognised confidentiality footers. This only changes WhatsApp presentation; extraction, calendar evidence and email fingerprints retain the complete cleaned source. Chunks prefer paragraph/sentence boundaries and never split a URL. InOut may still add its own introduction and flatten line breaks.

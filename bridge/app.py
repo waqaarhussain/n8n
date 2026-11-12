@@ -264,17 +264,47 @@ def connect_calendar(settings):
         raise
 
 
+def notification_body(body):
+    """Remove presentation clutter only. Extraction and dedup keep the complete source."""
+    lines = body.splitlines()
+    kept = []
+    footer = re.compile(
+        r'^\s*(?:The Shrubbery School Limited\b|'
+        r'The information contained in this (?:e-?mail|message)\b|'
+        r'This (?:e-?mail|message)(?: and (?:any |its )?attachments)? is confidential\b)', re.I)
+    for line in lines:
+        if footer.match(line):
+            break
+        if re.fullmatch(r'\s*[_=\-]{5,}\s*', line):
+            continue
+        kept.append(line.rstrip())
+    # Remove closing pleasantries left immediately before the signature/footer.
+    while kept and (not kept[-1].strip() or re.fullmatch(
+            r'\s*(?:many thanks|thank you|kind regards|best regards|regards)[.,!]?\s*', kept[-1], re.I)):
+        kept.pop()
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
+
+
 def chunks(text, size=350):
-    """Conservative chunk size; never truncate the email locally."""
+    """Split at paragraphs, sentences or spaces, preserving complete URLs and text."""
     if not 100 <= size <= 3000:
         raise ValueError('WhatsApp chunk size must be 100..3000 characters.')
     result = []
     while len(text) > size:
-        cut = text.rfind('\n', 0, size + 1)
-        if cut < size // 2:
+        cut = text.rfind('\n\n', 0, size + 1)
+        if cut < size // 3:
+            sentences = list(re.finditer(r'[.!?]\s+', text[:size + 1]))
+            cut = sentences[-1].end() if sentences else -1
+        if cut < size // 3:
             cut = text.rfind(' ', 0, size + 1)
-        if cut < size // 2:
+        if cut < size // 3:
             cut = size
+        for url in re.finditer(r'https?://[^\s]+', text):
+            if url.start() < cut < url.end():
+                if url.start() == 0:
+                    raise ValueError('A URL exceeds the WhatsApp chunk limit; review it manually.')
+                cut = url.start()
+                break
         result.append(text[:cut])
         text = text[cut:]
     if text:
@@ -332,7 +362,7 @@ def notify(db, settings, mail_id, title, body):
         if not key:
             continue
         recipient_id = hashlib.sha256(key.encode()).hexdigest()[:20]
-        message = 'Email From School\n\nSubject: ' + title + '\n\n' + body
+        message = 'Email From School\n\nSubject: ' + title + '\n\n' + notification_body(body)
         pieces = chunks(message, settings.get('inout', {}).get('chunk_size', 350))
         for index, piece in enumerate(pieces):
             delivery_id = f'{mail_id}:{recipient_id}:{index}'
