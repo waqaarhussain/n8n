@@ -291,3 +291,16 @@ def test_old_delivery_schema_migrates_without_losing_history(tmp_path,monkeypatc
     with app.database() as db:
         row=db.execute('SELECT * FROM deliveries').fetchone()
         assert row['id']=='old' and row['status']=='accepted' and row['error']==''
+
+
+def test_inout_uses_documented_get_query(monkeypatch):
+    key = 'test-key-only'
+    client = MagicMock()
+    client.get.return_value = app.httpx.Response(200, json={'success': True})
+    context = MagicMock()
+    context.__enter__.return_value = client
+    monkeypatch.setattr(app.httpx, 'Client', MagicMock(return_value=context))
+    app.send_inout(key, 'School email & test')
+    client.get.assert_called_once_with('https://api.inout.bot/send',
+        params={'apikey': key, 'message': 'School email & test'})
+    client.post.assert_not_called()

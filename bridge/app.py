@@ -306,7 +306,8 @@ def provider_detail(response, key):
 def send_inout(key, message):
     try:
         with httpx.Client(timeout=30) as client:
-            response = client.post('https://api.inout.bot/send', data={'apikey': key, 'message': message})
+            # Match InOut's published GET example; form-body authentication was rejected.
+            response = client.get('https://api.inout.bot/send', params={'apikey': key, 'message': message})
     except httpx.TimeoutException:
         raise InOutError('InOut request timed out; acceptance is unknown. Check WhatsApp before retrying.') from None
     except httpx.RequestError:
