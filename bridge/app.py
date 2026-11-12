@@ -64,6 +64,10 @@ def database():
       CREATE TABLE IF NOT EXISTS deliveries (
         id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL);
     ''')
+    columns = {row['name'] for row in db.execute('PRAGMA table_info(deliveries)')}
+    if 'error' not in columns:
+        db.execute("ALTER TABLE deliveries ADD COLUMN error TEXT NOT NULL DEFAULT ''")
+        db.commit()
     return db
 
 
@@ -278,20 +282,45 @@ def chunks(text, size=350):
     return result
 
 
+class InOutError(ValueError):
+    """Safe, redacted provider diagnostic suitable for display."""
+
+
+def provider_detail(response, key):
+    try:
+        value = response.json()
+    except ValueError:
+        return 'Provider returned a non-JSON response.'
+    if isinstance(value, dict):
+        details = [str(value[field]) for field in ('error', 'message', 'detail', 'description')
+                   if value.get(field)]
+        text = '; '.join(details) or 'No provider error detail supplied.'
+    else:
+        text = 'Unexpected provider response format.'
+    if key:
+        text = text.replace(key, '[REDACTED]')
+    text = re.sub(r'(?i)(apikey[=:\s]+)[^\s&,;]+', r'\1[REDACTED]', text)
+    return text[:500]
+
+
 def send_inout(key, message):
-    with httpx.Client(timeout=30) as client:
-        response = client.post('https://api.inout.bot/send', data={'apikey': key, 'message': message})
-        if response.status_code >= 400:
-            raise ValueError(f'InOut HTTP {response.status_code}')
-        # The published API does not guarantee a response schema. Do not count explicit
-        # provider errors as delivery, but HTTP acceptance is not proof of handset delivery.
-        try:
-            result = response.json()
-        except ValueError:
-            result = None
-        if isinstance(result, dict) and (result.get('error') or result.get('success') is False
-                                         or str(result.get('status', '')).lower() in ('error', 'failed')):
-            raise ValueError('InOut rejected the request; check message balance and credentials.')
+    try:
+        with httpx.Client(timeout=30) as client:
+            response = client.post('https://api.inout.bot/send', data={'apikey': key, 'message': message})
+    except httpx.TimeoutException:
+        raise InOutError('InOut request timed out; acceptance is unknown. Check WhatsApp before retrying.') from None
+    except httpx.RequestError:
+        raise InOutError('Could not connect to InOut. Check server DNS/network access.') from None
+    if response.status_code >= 300:
+        raise InOutError(f'InOut HTTP {response.status_code}: ' + provider_detail(response, key))
+    try:
+        result = response.json()
+    except ValueError:
+        # A generic HTML 200 must not be counted as an accepted API request.
+        raise InOutError('InOut returned a non-JSON response; delivery cannot be confirmed.') from None
+    if isinstance(result, dict) and (result.get('error') or result.get('success') is False
+                                     or str(result.get('status', '')).lower() in ('error', 'failed')):
+        raise InOutError('InOut rejected the request: ' + provider_detail(response, key))
 
 
 def notify(db, settings, mail_id, title, body):
@@ -311,16 +340,17 @@ def notify(db, settings, mail_id, title, body):
                 if row['status'] != 'accepted':
                     pending += 1
                 continue
-            db.execute('INSERT INTO deliveries VALUES (?, ?, ?)',
+            db.execute('INSERT INTO deliveries (id,status,updated_at) VALUES (?, ?, ?)',
                        (delivery_id, 'sending', datetime.now(timezone.utc).isoformat()))
             db.commit()
             try:
                 prefix = f'[{index + 1}/{len(pieces)}]\n' if len(pieces) > 1 else ''
                 send_inout(key, prefix + piece)
-            except Exception:
+            except Exception as exc:
                 # A timeout may happen after the provider accepted the message. Do not
                 # resend automatically and risk duplicates. Record for manual review.
-                db.execute('UPDATE deliveries SET status=? WHERE id=?', ('uncertain', delivery_id))
+                detail = str(exc) if isinstance(exc, InOutError) else 'Delivery failed (' + type(exc).__name__ + '); check the provider before retrying.'
+                db.execute('UPDATE deliveries SET status=?, error=? WHERE id=?', ('uncertain', detail, delivery_id))
                 db.commit()
                 pending += 1
                 break
@@ -390,9 +420,11 @@ def process(data, settings=None):
             finally:
                 client.close()
         sent, uncertain = notify(db, settings, mail_id, title, body)
+        errors = [row['error'] or 'Earlier uncertain send has no saved error detail. Run n8n-live check-whatsapp.'
+                  for row in db.execute("SELECT error FROM deliveries WHERE id LIKE ? AND status != 'accepted'", (mail_id + ':%',))]
         return {'status': 'review' if review else ('duplicate' if duplicate else 'processed'),
                 'reason': reason, 'events_created': created, 'whatsapp_requests_accepted': sent,
-                'uncertain_deliveries': uncertain,
+                'uncertain_deliveries': uncertain, 'whatsapp_errors': errors,
                 'note': 'HTTP acceptance is not proof of WhatsApp delivery.'}
 
 

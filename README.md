@@ -106,6 +106,7 @@ sudo update-live                 # where no other update-live existed
 sudo n8n-live update              # always works for this project
 sudo n8n-setup                    # reconfigure iCloud, AI and WhatsApp
 sudo n8n-live check-icloud        # read-only connection check
+sudo n8n-live check-whatsapp      # sends one short test per configured recipient
 sudo n8n-live web                 # change web UI IP/hostname without replacing credentials
 sudo n8n-live status
 sudo n8n-live logs
@@ -151,3 +152,5 @@ bash -n bootstrap.sh install.sh scripts/n8n-live
 Tests cover forwarding-header cleanup, complete Outlook bodies, event timing, London offsets, duplicate emails/events, multi-recipient fan-out, uncertain-send handling, calendar selection, alias scoping and workflow defaults. CI also validates Compose and builds the bridge image.
 
 The prepared code has local automated tests. Ubuntu deployment, iCloud Mail login, iCloud writes and InOut handset delivery must be verified on the actual server/accounts.
+
+WhatsApp diagnostics: processing responses include `whatsapp_errors` with redacted provider errors. Older uncertain sends have no saved error detail. Use `n8n-live check-whatsapp` to send a fresh short test without reprocessing email or creating calendar events. It uses the provider message allowance. A successful request is not a delivery receipt.

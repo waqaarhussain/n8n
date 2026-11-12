@@ -267,3 +267,27 @@ def test_api_key_preview_is_masked_and_password_stays_hidden(monkeypatch, capsys
     assert key not in capsys.readouterr().out
     for short in ('123','123456','12345678'):
         assert short not in setup.mask_key(short)
+
+
+def test_provider_error_is_redacted_and_saved(state,monkeypatch):
+    key='sensitive-api-key-1234'
+    response=app.httpx.Response(401,json={'error':'Invalid apikey '+key})
+    detail=app.provider_detail(response,key)
+    assert key not in detail and '[REDACTED]' in detail
+    monkeypatch.setattr(app,'send_inout',MagicMock(side_effect=app.InOutError('InOut HTTP 401: '+detail)))
+    with app.database() as db:
+        assert app.notify(db,{'inout':{'recipients':[{'api_key':key}]}},'mail','title','body')==(0,1)
+        saved=db.execute('SELECT error FROM deliveries').fetchone()['error']
+        assert '401' in saved and key not in saved
+
+
+def test_old_delivery_schema_migrates_without_losing_history(tmp_path,monkeypatch):
+    import sqlite3
+    path=tmp_path/'old.sqlite3'
+    with sqlite3.connect(path) as db:
+        db.execute('CREATE TABLE deliveries(id TEXT PRIMARY KEY,status TEXT,updated_at TEXT)')
+        db.execute("INSERT INTO deliveries VALUES('old','accepted','today')")
+    monkeypatch.setattr(app,'STATE',path)
+    with app.database() as db:
+        row=db.execute('SELECT * FROM deliveries').fetchone()
+        assert row['id']=='old' and row['status']=='accepted' and row['error']==''
