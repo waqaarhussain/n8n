@@ -48,13 +48,37 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--remove-whatsapp', action='store_true')
+    parser.add_argument('--remove-inout', action='store_true')
+    parser.add_argument('--textmebot', action='store_true')
+    parser.add_argument('--enable-textmebot', action='store_true')
     args = parser.parse_args()
     settings = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
-    if args.remove_whatsapp:
-        if 'inout' in settings:
-            settings.pop('inout')
-            save(settings)
-        print('Calendar-only settings ready. Messaging is disabled.')
+    if args.textmebot:
+        old = settings.get('textmebot', {})
+        print('Link your WhatsApp number using the TextMeBot email link first.')
+        key = secret('TextMeBot API key', old.get('api_key', ''), preview=True)
+        recipient = ask('Recipient WhatsApp number with country code (e.g. +447...)', old.get('recipient', ''))
+        recipient = re.sub(r'[ ()-]', '', recipient)
+        if not key or not re.fullmatch(r'\+?[1-9]\d{6,14}', recipient):
+            raise SystemExit('A key and a valid international phone number are required. Nothing saved.')
+        settings['textmebot'] = {'api_key': key, 'recipient': recipient, 'enabled': False}
+        settings.pop('inout', None)
+        save(settings)
+        print('Saved. Automatic notifications are OFF. Run n8n-live check-textmebot.')
+        return
+    if args.enable_textmebot:
+        if not all(settings.get('textmebot', {}).get(k) for k in ('api_key', 'recipient')):
+            raise SystemExit('Run n8n-live setup-textmebot first.')
+        settings['textmebot']['enabled'] = True
+        save(settings)
+        print('TextMeBot email notifications enabled. Calendar settings preserved.')
+        return
+    if args.remove_whatsapp or args.remove_inout:
+        settings.pop('inout', None)
+        if args.remove_whatsapp:
+            settings.pop('textmebot', None)
+        save(settings)
+        print('Legacy InOut settings removed.' if args.remove_inout else 'Messaging disabled. Calendar settings preserved.')
         return
     if args.check:
         client, calendar = connect_calendar(settings)

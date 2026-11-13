@@ -317,11 +317,16 @@ def process(data, settings=None):
                     created += 1
             finally:
                 client.close()
-        # Keep zero-valued legacy fields so already-published workflows do not
-        # route old delivery failures to their review branch. No messaging code runs.
+        # Calendar writes are committed before optional notification delivery.
+        from textmebot import notify
+        try:
+            notification = notify(db, settings.get('textmebot', {}), mail_id, title, body)
+        except Exception:
+            notification = {'status': 'error', 'reason': 'Notification failed; calendar processing completed.'}
+        # Legacy published workflows must not fail calendar runs on message errors.
         return {'status': 'review' if review else ('duplicate' if duplicate else 'processed'),
                 'reason': reason, 'events_created': created,
-                'uncertain_deliveries': 0}
+                'uncertain_deliveries': 0, 'notification': notification}
 
 
 

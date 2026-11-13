@@ -156,6 +156,24 @@ sudo n8n-live update
 sudo n8n-live remove-whatsapp
 ```
 
-The second command removes saved InOut recipient keys from the current settings file without changing Apple credentials, the selected calendar, the OpenAI key/model or the mail alias. Normal subsequent updates perform this cleanup too. Older private backups retain their original settings. Messaging is absent from the application even if an older settings file is restored.
+The second command removes saved InOut recipient keys from the current settings file without changing Apple credentials, the selected calendar, the OpenAI key/model or the mail alias. Normal subsequent updates perform this cleanup too. Older private backups retain their original settings. InOut sending is absent from the application even if older settings are restored. TextMeBot is available separately as an opt-in integration.
 
-Do not reimport the workflow to apply this update: the already-published workflow calls the updated bridge and remains compatible. Its old display name may still mention WhatsApp; rename it in the editor if wanted. No email notifications are sent. Emails with no events finish without creating calendar entries; ambiguous event details require review. Existing email and event duplicate protection is preserved.
+Do not reimport the workflow to apply this update: the already-published workflow calls the updated bridge and remains compatible. Its old display name may still mention WhatsApp; rename it in the editor if wanted. No email notifications are sent unless optional TextMeBot is explicitly configured and enabled. Emails with no events finish without creating calendar entries; ambiguous event details require review. Existing email and event duplicate protection is preserved.
+
+## Optional TextMeBot trial
+
+InOut is removed. TextMeBot is a separate opt-in integration. Complete the add-number and WhatsApp-linking steps in the email from TextMeBot first. Its documented endpoint is `https://api.textmebot.com/send.php` with `recipient`, `apikey` and `text` parameters.
+
+```bash
+sudo n8n-live update
+sudo n8n-live setup-textmebot
+sudo n8n-live check-textmebot
+# Only after seeing the test message on your phone:
+sudo n8n-live enable-textmebot
+```
+
+Setup prompts only for the TextMeBot key (masked confirmation) and recipient phone number with country code, preserving Apple and OpenAI settings. Automatic messages stay disabled until explicitly enabled. The check command sends one short test to the saved recipient. Provider HTTP responses are not delivery receipts. No live handset delivery or provider message limits are assumed from unit tests.
+
+Once enabled, messages contain `Email From School`, the subject and the body with recognised school signature/disclaimer blocks removed. Newlines and full URLs are preserved in requests. Long text is split at up to 3,000 characters per part; actual provider acceptance and rendering require testing. Calendar writes finish before notification sending; notification errors are reported separately and cannot undo saved events. Ambiguous sends are held instead of retried automatically. Existing imported workflows remain compatible.
+
+`sudo n8n-live remove-whatsapp` now removes both old InOut and optional TextMeBot settings. Normal updates remove only obsolete InOut keys and preserve TextMeBot configuration. Your private older backups can still contain the original saved keys.
