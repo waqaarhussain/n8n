@@ -39,6 +39,7 @@ fi
 chmod 640 config/settings.json
 chown root:1000 config/settings.json
 install -m 755 scripts/n8n-live /usr/local/bin/n8n-live
+python3 scripts/install-helper.py
 printf '%s\n' "$PWD" > /etc/waqaar-n8n.path
 if [[ ! -e /usr/local/bin/update-live ]]; then
   ln -s /usr/local/bin/n8n-live /usr/local/bin/update-live

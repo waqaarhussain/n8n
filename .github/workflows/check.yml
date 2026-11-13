@@ -21,7 +21,7 @@ jobs:
         run: |
           docker run -d --rm --name n8n-stats-test -e POSTGRES_PASSWORD=test postgres:16-alpine
           for attempt in $(seq 1 30); do
-            if docker exec n8n-stats-test pg_isready -U postgres; then break; fi
+            if docker exec n8n-stats-test pg_isready -h 127.0.0.1 -U postgres; then break; fi
             sleep 1
           done
           STATS_TEST_CONTAINER=n8n-stats-test python tests/stats_smoke.py

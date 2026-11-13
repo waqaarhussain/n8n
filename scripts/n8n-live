@@ -6,6 +6,7 @@ exec 9>/var/lock/waqaar-n8n.lock
 flock -n 9 || { echo 'Another n8n maintenance command is running.' >&2; exit 1; }
 cmd=${1:-update}
 [[ $(basename "$0") == n8n-setup ]] && cmd=setup
+[[ $(basename "$0") == helper ]] && cmd=helper
 backup() {
   local target="$PWD/backups/$(date -u +%Y%m%dT%H%M%SZ)"
   install -d -m 700 "$target"
@@ -31,6 +32,7 @@ case "$cmd" in
     docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 school-bridge python setup.py --remove-inout
     docker compose up -d --wait --wait-timeout 180
     install -m 755 scripts/n8n-live /usr/local/bin/n8n-live
+    python3 scripts/install-helper.py
     echo 'Updated. Your configured credentials, database and edited workflows are preserved.'
     ;;
   backup) backup ;;
@@ -63,6 +65,12 @@ case "$cmd" in
     fi
     python3 scripts/finish.py
     ;;
+  helper)
+    python3 scripts/install-helper.py
+    # Release the maintenance lock before the selected helper acquires it.
+    exec 9>&-
+    exec python3 scripts/helper-menu.py
+    ;;
   stats) python3 scripts/stats.py ;;
   stats-reset) python3 scripts/stats.py reset ;;
   status) docker compose ps ;;
@@ -74,5 +82,5 @@ case "$cmd" in
     python3 scripts/environment.py --image "$image_ref"
     docker compose up -d --wait --wait-timeout 180
     ;;
-  *) echo 'Usage: n8n-live {update|backup|setup|check-icloud|remove-whatsapp|setup-textmebot|check-textmebot|enable-textmebot|import|web|stats|stats-reset|status|logs|upgrade-engine}'; exit 2 ;;
+  *) echo 'Usage: n8n-live {helper|update|backup|setup|check-icloud|remove-whatsapp|setup-textmebot|check-textmebot|enable-textmebot|import|web|stats|stats-reset|status|logs|upgrade-engine}'; exit 2 ;;
 esac

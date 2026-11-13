@@ -203,3 +203,9 @@ sudo n8n-live stats        # numbered workflow picker; toggles that workflow's s
 The reset backs up Insights tables and briefly stops/restarts n8n so buffered counts are flushed before clearing. It deletes only the selected overview-counter data, not execution logs, workflows, credentials, calendar events or bridge duplicate tracking. Refresh the Overview page afterwards.
 
 The pause helper keeps workflows running and execution history available. It installs a local PostgreSQL trigger on `insights_raw` that zeroes metric values for the selected workflow while paused. Time windows also exclude buffered records flushed after resuming. Counts from before pausing remain. A run is classified by its completion/Insights timestamp. This is a local extension to n8n, not a native n8n feature; schema guards reject incompatible versions. It has been checked against n8n 2.47.5 source and tested with raw-to-counter data in PostgreSQL. Recheck it before upgrading n8n across database schema changes.
+
+## Helper menu
+
+Run `helper` for a numbered menu with a description of every n8n maintenance command. Selecting a command continues its existing flow, including the workflow picker for stats. The selected helper reacquires the maintenance lock normally; menu dispatch releases its own lock first. This menu covers this n8n project, not unrelated applications on your server.
+
+For an installation predating the menu, run `sudo n8n-live update`, then `sudo n8n-live helper` once. That first menu invocation also installs the `helper` shortcut. If a different application already owns `/usr/local/bin/helper`, it is preserved; use `sudo n8n-live helper` for this menu.
