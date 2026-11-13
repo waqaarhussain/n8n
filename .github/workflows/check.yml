@@ -32,4 +32,6 @@ jobs:
           N8N_IMAGE: docker.n8n.io/n8nio/n8n:stable
         run: |
           mkdir -p config data
-          docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 --build school-bridge python -c 'from setup import save; from app import CONFIG; import json; save({"smoke_test": True}); assert json.loads(CONFIG.read_text())["smoke_test"] is True'
+          docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 --build school-bridge python -c 'from setup import save; from app import CONFIG; import json; save({"smoke_test": True, "inout": {"recipients": [{"api_key": "old-test"}]}}); assert json.loads(CONFIG.read_text())["smoke_test"] is True'
+          docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 school-bridge python setup.py --remove-whatsapp
+          docker compose run --rm --no-deps school-bridge python -c 'from app import config; assert config() == {"smoke_test": True}'

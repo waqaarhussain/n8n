@@ -1,4 +1,4 @@
-"""Private Docker-network bridge: email -> validated event(s) -> iCloud + InOut.
+"""Private Docker-network bridge: email -> validated event(s) -> iCloud Calendar.
 No editor routes, credentials or bridge ports are exposed to the public internet.
 """
 from email.utils import getaddresses
@@ -61,13 +61,7 @@ def database():
         fingerprint TEXT PRIMARY KEY, extraction TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS events (
         uid TEXT PRIMARY KEY, created_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS deliveries (
-        id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL);
     ''')
-    columns = {row['name'] for row in db.execute('PRAGMA table_info(deliveries)')}
-    if 'error' not in columns:
-        db.execute("ALTER TABLE deliveries ADD COLUMN error TEXT NOT NULL DEFAULT ''")
-        db.commit()
     return db
 
 
@@ -264,133 +258,6 @@ def connect_calendar(settings):
         raise
 
 
-def notification_body(body):
-    """Remove presentation clutter only. Extraction and dedup keep the complete source."""
-    lines = body.splitlines()
-    kept = []
-    footer = re.compile(
-        r'^\s*(?:The Shrubbery School Limited\b|'
-        r'The information contained in this (?:e-?mail|message)\b|'
-        r'This (?:e-?mail|message)(?: and (?:any |its )?attachments)? is confidential\b)', re.I)
-    for line in lines:
-        if footer.match(line):
-            break
-        if re.fullmatch(r'\s*[_=\-]{5,}\s*', line):
-            continue
-        kept.append(line.rstrip())
-    # Remove closing pleasantries left immediately before the signature/footer.
-    while kept and (not kept[-1].strip() or re.fullmatch(
-            r'\s*(?:many thanks|thank you|kind regards|best regards|regards)[.,!]?\s*', kept[-1], re.I)):
-        kept.pop()
-    return re.sub(r'\n{3,}', '\n\n', '\n'.join(kept)).strip()
-
-
-def chunks(text, size=350):
-    """Split at paragraphs, sentences or spaces, preserving complete URLs and text."""
-    if not 100 <= size <= 3000:
-        raise ValueError('WhatsApp chunk size must be 100..3000 characters.')
-    result = []
-    while len(text) > size:
-        cut = text.rfind('\n\n', 0, size + 1)
-        if cut < size // 3:
-            sentences = list(re.finditer(r'[.!?]\s+', text[:size + 1]))
-            cut = sentences[-1].end() if sentences else -1
-        if cut < size // 3:
-            cut = text.rfind(' ', 0, size + 1)
-        if cut < size // 3:
-            cut = size
-        for url in re.finditer(r'https?://[^\s]+', text):
-            if url.start() < cut < url.end():
-                if url.start() == 0:
-                    raise ValueError('A URL exceeds the WhatsApp chunk limit; review it manually.')
-                cut = url.start()
-                break
-        result.append(text[:cut])
-        text = text[cut:]
-    if text:
-        result.append(text)
-    return result
-
-
-class InOutError(ValueError):
-    """Safe, redacted provider diagnostic suitable for display."""
-
-
-def provider_detail(response, key):
-    try:
-        value = response.json()
-    except ValueError:
-        return 'Provider returned a non-JSON response.'
-    if isinstance(value, dict):
-        details = [str(value[field]) for field in ('error', 'message', 'detail', 'description')
-                   if value.get(field)]
-        text = '; '.join(details) or 'No provider error detail supplied.'
-    else:
-        text = 'Unexpected provider response format.'
-    if key:
-        text = text.replace(key, '[REDACTED]')
-    text = re.sub(r'(?i)(apikey[=:\s]+)[^\s&,;]+', r'\1[REDACTED]', text)
-    return text[:500]
-
-
-def send_inout(key, message):
-    try:
-        with httpx.Client(timeout=30) as client:
-            # Match InOut's published GET example; form-body authentication was rejected.
-            response = client.get('https://api.inout.bot/send', params={'apikey': key, 'message': message})
-    except httpx.TimeoutException:
-        raise InOutError('InOut request timed out; acceptance is unknown. Check WhatsApp before retrying.') from None
-    except httpx.RequestError:
-        raise InOutError('Could not connect to InOut. Check server DNS/network access.') from None
-    if response.status_code >= 300:
-        raise InOutError(f'InOut HTTP {response.status_code}: ' + provider_detail(response, key))
-    try:
-        result = response.json()
-    except ValueError:
-        # A generic HTML 200 must not be counted as an accepted API request.
-        raise InOutError('InOut returned a non-JSON response; delivery cannot be confirmed.') from None
-    if isinstance(result, dict) and (result.get('error') or result.get('success') is False
-                                     or str(result.get('status', '')).lower() in ('error', 'failed')):
-        raise InOutError('InOut rejected the request: ' + provider_detail(response, key))
-
-
-def notify(db, settings, mail_id, title, body):
-    sent = 0
-    pending = 0
-    for recipient in settings.get('inout', {}).get('recipients', []):
-        key = recipient.get('api_key', '')
-        if not key:
-            continue
-        recipient_id = hashlib.sha256(key.encode()).hexdigest()[:20]
-        message = 'Email From School\n\nSubject: ' + title + '\n\n' + notification_body(body)
-        pieces = chunks(message, settings.get('inout', {}).get('chunk_size', 350))
-        for index, piece in enumerate(pieces):
-            delivery_id = f'{mail_id}:{recipient_id}:{index}'
-            row = db.execute('SELECT status FROM deliveries WHERE id=?', (delivery_id,)).fetchone()
-            if row:
-                if row['status'] != 'accepted':
-                    pending += 1
-                continue
-            db.execute('INSERT INTO deliveries (id,status,updated_at) VALUES (?, ?, ?)',
-                       (delivery_id, 'sending', datetime.now(timezone.utc).isoformat()))
-            db.commit()
-            try:
-                prefix = f'[{index + 1}/{len(pieces)}]\n' if len(pieces) > 1 else ''
-                send_inout(key, prefix + piece)
-            except Exception as exc:
-                # A timeout may happen after the provider accepted the message. Do not
-                # resend automatically and risk duplicates. Record for manual review.
-                detail = str(exc) if isinstance(exc, InOutError) else 'Delivery failed (' + type(exc).__name__ + '); check the provider before retrying.'
-                db.execute('UPDATE deliveries SET status=?, error=? WHERE id=?', ('uncertain', detail, delivery_id))
-                db.commit()
-                pending += 1
-                break
-            db.execute('UPDATE deliveries SET status=? WHERE id=?', ('accepted', delivery_id))
-            db.commit()
-            sent += 1
-    return sent, pending
-
-
 def process(data, settings=None):
     settings = settings if settings is not None else config()
     mail_settings = settings.get('mail', {})
@@ -450,13 +317,12 @@ def process(data, settings=None):
                     created += 1
             finally:
                 client.close()
-        sent, uncertain = notify(db, settings, mail_id, title, body)
-        errors = [row['error'] or 'Earlier uncertain send has no saved error detail. Run n8n-live check-whatsapp.'
-                  for row in db.execute("SELECT error FROM deliveries WHERE id LIKE ? AND status != 'accepted'", (mail_id + ':%',))]
+        # Keep zero-valued legacy fields so already-published workflows do not
+        # route old delivery failures to their review branch. No messaging code runs.
         return {'status': 'review' if review else ('duplicate' if duplicate else 'processed'),
-                'reason': reason, 'events_created': created, 'whatsapp_requests_accepted': sent,
-                'uncertain_deliveries': uncertain, 'whatsapp_errors': errors,
-                'note': 'HTTP acceptance is not proof of WhatsApp delivery.'}
+                'reason': reason, 'events_created': created,
+                'uncertain_deliveries': 0}
+
 
 
 class Handler(BaseHTTPRequestHandler):

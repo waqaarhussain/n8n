@@ -31,4 +31,4 @@ n8n-live check-icloud
 
 If PostgreSQL's current role password differs from the restored `.env`, restore the matching password in PostgreSQL before starting n8n. Reusing the existing PostgreSQL volume does not rerun its initial password setup. Use PostgreSQL's interactive `\password n8n` command; do not paste the password into shell history.
 
-Restoring tracking data can reintroduce already-sent notifications if the backup predates them. Check the workflow and delivery state before publishing/retrying.
+Restoring tracking data from an older backup can lose records of previously processed emails and events. Check calendar entries before publishing or retrying.

@@ -47,8 +47,15 @@ def save(settings):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--remove-whatsapp', action='store_true')
     args = parser.parse_args()
     settings = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+    if args.remove_whatsapp:
+        if 'inout' in settings:
+            settings.pop('inout')
+            save(settings)
+        print('Calendar-only settings ready. Messaging is disabled.')
+        return
     if args.check:
         client, calendar = connect_calendar(settings)
         try:
@@ -127,23 +134,9 @@ def main():
     settings['ai'] = {'api_key': key, 'model': model}
     settings['default_duration_minutes'] = 60
     settings.setdefault('allowed_senders', [])
-    print('\nInOut WhatsApp. Each recipient generates their own key by messaging Create APIKey to the bot.')
-    recipients = settings.get('inout', {}).get('recipients', [])
-    for recipient in recipients:
-        print('Saved recipient: ' + recipient.get('label', 'Unnamed') + ' | ' + mask_key(recipient.get('api_key', '')))
-    if recipients and ask('Replace saved recipient list? y/n', 'n').lower() == 'y':
-        recipients = []
-    while ask('Add a WhatsApp recipient? y/n', 'y' if not recipients else 'n').lower() == 'y':
-        label = ask('Recipient label (e.g. Me)')
-        recipient_key = secret('Their InOut API key', preview=True)
-        if recipient_key:
-            if any(r.get('api_key') == recipient_key for r in recipients):
-                print('That recipient key is already configured; not added twice.')
-            else:
-                recipients.append({'label': label, 'api_key': recipient_key})
-    settings['inout'] = {'recipients': recipients, 'chunk_size': 350}
+    settings.pop('inout', None)
     save(settings)
-    print('\nSaved. iCloud discovery passed; calendar write and WhatsApp delivery still need a live test.')
+    print('\nSaved. iCloud discovery passed; calendar writes still need a live test.')
     if not key:
         print('AI extraction is NOT configured. Run n8n-setup again after obtaining an API key.')
 

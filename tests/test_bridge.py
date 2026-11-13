@@ -86,40 +86,10 @@ def test_all_day_exclusive_end():
     assert item.decoded('dtend') == day + timedelta(days=1)
 
 
-def test_chunks_preserve_entire_body():
-    text = 'Email From School\n\n' + ('word line\n' * 1000)
-    parts = app.chunks(text)
-    assert ''.join(parts) == text
-    assert max(map(len, parts)) <= 350
-
-
-def test_two_recipients_duplicate_email_no_resend(state, monkeypatch):
-    sent = []
-    monkeypatch.setattr(app, 'send_inout', lambda key, text: sent.append((key,text)))
-    settings = {'inout':{'recipients':[{'api_key':'one'},{'api_key':'two'}]}}
-    with app.database() as db:
-        first = app.notify(db, settings, 'id', 'Workshop','Body')
-        second = app.notify(db, settings, 'id', 'Workshop','Body')
-    assert first == (2,0)
-    assert second == (0,0)
-    assert [key for key,_ in sent] == ['one','two']
-
-
-def test_ambiguous_send_not_automatically_retried(state, monkeypatch):
-    send = MagicMock(side_effect=TimeoutError)
-    monkeypatch.setattr(app, 'send_inout', send)
-    settings={'inout':{'recipients':[{'api_key':'one'}]}}
-    with app.database() as db:
-        assert app.notify(db, settings, 'id','Title','Body') == (0,1)
-        assert app.notify(db, settings, 'id','Title','Body') == (0,1)
-    assert send.call_count == 1
-
-
-def test_review_no_calendar_write_but_email_still_sent(state, monkeypatch):
+def test_review_does_not_write_calendar(state, monkeypatch):
     monkeypatch.setattr(app, 'extract', lambda *args: app.Extraction(needs_review=True, reason='Conflicting dates', events=[]))
     connect = MagicMock()
     monkeypatch.setattr(app, 'connect_calendar', connect)
-    monkeypatch.setattr(app, 'notify', lambda *args:(1,0))
     result=app.process({'subject':'School','body':'Conflicting dates'}, {})
     assert result['status']=='review'
     connect.assert_not_called()
@@ -133,7 +103,6 @@ def test_idempotent_event_and_cached_ai(state, monkeypatch):
     monkeypatch.setattr(app, 'connect_calendar', lambda _: (client,calendar))
     remote = MagicMock()
     monkeypatch.setattr(app.caldav, 'Event', remote)
-    monkeypatch.setattr(app, 'notify', lambda *args:(0,0))
     data={'subject':'School','body':'Workshop at 2.15pm'}
     first=app.process(data,{})
     second=app.process(data,{})
@@ -148,7 +117,6 @@ def test_fabricated_evidence_blocks_calendar(state, monkeypatch):
     monkeypatch.setattr(app, 'extract', lambda *args: app.Extraction(needs_review=False,reason='',events=[example(evidence='not in email')]))
     connect=MagicMock()
     monkeypatch.setattr(app, 'connect_calendar',connect)
-    monkeypatch.setattr(app, 'notify', lambda *args:(0,0))
     assert app.process({'subject':'School','body':'Workshop at 2.15pm'}, {})['status']=='review'
     connect.assert_not_called()
 
@@ -269,69 +237,52 @@ def test_api_key_preview_is_masked_and_password_stays_hidden(monkeypatch, capsys
         assert short not in setup.mask_key(short)
 
 
-def test_provider_error_is_redacted_and_saved(state,monkeypatch):
-    key='sensitive-api-key-1234'
-    response=app.httpx.Response(401,json={'error':'Invalid apikey '+key})
-    detail=app.provider_detail(response,key)
-    assert key not in detail and '[REDACTED]' in detail
-    monkeypatch.setattr(app,'send_inout',MagicMock(side_effect=app.InOutError('InOut HTTP 401: '+detail)))
+def test_calendar_only_ignores_old_recipient_settings_and_uncertain_sends(state, monkeypatch):
+    # Old server config/state cannot make an HTTP request to a messaging provider.
+    extracted = app.Extraction(needs_review=False, reason='No events', events=[])
+    monkeypatch.setattr(app, 'extract', lambda *args: extracted)
+    network = MagicMock(side_effect=AssertionError('Unexpected external call'))
+    monkeypatch.setattr(app.httpx, 'Client', network)
+    calendar = MagicMock()
+    monkeypatch.setattr(app, 'connect_calendar', calendar)
+    data = {'subject': 'School notice', 'body': 'General information only.'}
     with app.database() as db:
-        assert app.notify(db,{'inout':{'recipients':[{'api_key':key}]}},'mail','title','body')==(0,1)
-        saved=db.execute('SELECT error FROM deliveries').fetchone()['error']
-        assert '401' in saved and key not in saved
+        db.execute('CREATE TABLE deliveries(id TEXT PRIMARY KEY, status TEXT, updated_at TEXT)')
+        db.execute("INSERT INTO deliveries VALUES ('legacy', 'uncertain', 'yesterday')")
+        db.commit()
+    result = app.process(data, {'inout': {'recipients': [{'api_key': 'old-key'}]}})
+    assert result['status'] == 'processed'
+    assert result['events_created'] == 0 and result['uncertain_deliveries'] == 0
+    assert app.process(data, {})['status'] == 'duplicate'
+    network.assert_not_called()
+    calendar.assert_not_called()
 
 
-def test_old_delivery_schema_migrates_without_losing_history(tmp_path,monkeypatch):
-    import sqlite3
-    path=tmp_path/'old.sqlite3'
-    with sqlite3.connect(path) as db:
-        db.execute('CREATE TABLE deliveries(id TEXT PRIMARY KEY,status TEXT,updated_at TEXT)')
-        db.execute("INSERT INTO deliveries VALUES('old','accepted','today')")
-    monkeypatch.setattr(app,'STATE',path)
-    with app.database() as db:
-        row=db.execute('SELECT * FROM deliveries').fetchone()
-        assert row['id']=='old' and row['status']=='accepted' and row['error']==''
-
-
-def test_inout_uses_documented_get_query(monkeypatch):
-    key = 'test-key-only'
+def test_calendar_only_extraction_sends_both_subject_and_complete_body(monkeypatch):
     client = MagicMock()
-    client.get.return_value = app.httpx.Response(200, json={'success': True})
+    client.post.return_value = app.httpx.Response(200, json={'choices': [{'message': {
+        'content': app.Extraction(needs_review=False, reason='', events=[]).model_dump_json()}}]})
     context = MagicMock()
     context.__enter__.return_value = client
-    monkeypatch.setattr(app.httpx, 'Client', MagicMock(return_value=context))
-    app.send_inout(key, 'School email & test')
-    client.get.assert_called_once_with('https://api.inout.bot/send',
-        params={'apikey': key, 'message': 'School email & test'})
-    client.post.assert_not_called()
+    monkeypatch.setattr(app.httpx, 'Client', lambda **kwargs: context)
+    app.extract({'ai': {'api_key': 'test'}}, 'Workshop 10 December at 2.15pm',
+                'Please attend. End time 3.30pm.', '2026-11-13')
+    sent = client.post.call_args.kwargs['json']['messages'][-1]['content']
+    assert 'Workshop 10 December at 2.15pm' in sent and 'End time 3.30pm' in sent
 
 
-def test_notification_removes_school_signature_legal_footer_and_separators():
-    body = """________________________
-Good afternoon.
-Please complete the survey within seven days.
-https://example.com/survey
-Many thanks.
-Kind regards.
-The Shrubbery School Limited
-Walmley Ash Road
-Telephone: 01234
-The information contained in this email is confidential."""
-    cleaned = app.notification_body(body)
-    assert 'seven days' in cleaned and 'https://example.com/survey' in cleaned
-    assert all(value not in cleaned for value in ('_____', 'Limited', 'Telephone', 'confidential', 'Kind regards', 'Many thanks'))
-    assert 'Telephone' in body  # source text remains intact for extraction
-
-
-def test_chunks_do_not_break_long_url_near_boundary():
-    url = 'https://docs.google.com/forms/d/e/' + 'a' * 170 + '/viewform'
-    text = 'Email From School\n\nSubject: Survey\n\n' + 'Some text. ' * 10 + url + '\nPlease respond.'
-    pieces = app.chunks(text)
-    assert ''.join(pieces) == text
-    assert any(url in piece for piece in pieces)
-    assert all(len(piece) <= 350 for piece in pieces)
-
-
-def test_notification_preserves_real_body_dates_and_signoff_in_prose():
-    text = 'Kind regards are appreciated.\nPlease attend on 10 December at 2.15pm.\nBring a signed form.'
-    assert app.notification_body(text) == text
+def test_remove_whatsapp_setup_preserves_mail_ai_calendar(tmp_path, monkeypatch):
+    import importlib.util
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location('calendar_setup', root/'bridge/setup.py')
+    setup = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(setup)
+    path = tmp_path/'settings.json'
+    expected = {'mail': {'alias': 'test@icloud.com'}, 'ai': {'api_key': 'ai-test'},
+                'icloud': {'calendar_url': 'calendar'}}
+    path.write_text(json.dumps(dict(expected, inout={'recipients': [{'api_key': 'old'}]})))
+    monkeypatch.setattr(setup, 'CONFIG', path)
+    monkeypatch.setattr(setup.os, 'chown', lambda *args: None)
+    monkeypatch.setattr(sys, 'argv', ['setup.py', '--remove-whatsapp'])
+    setup.main()
+    assert json.loads(path.read_text()) == expected
