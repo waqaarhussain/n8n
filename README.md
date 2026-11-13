@@ -9,7 +9,7 @@ A self-hosted n8n deployment with PostgreSQL, an `update-live` command and a pri
 - A server-side iCloud wizard: app-specific password, calendar discovery, explicit selection and read-only calendar/mail connection checks.
 - An importable workflow that listens for incoming iCloud Mail forwarded to a dedicated alias. No Microsoft/Entra app registration is required.
 - AI extraction of multiple event titles, dates, start/end times, locations and useful notes.
-- RSVP deadlines go into notes; missing end times use a clearly labelled 60-minute placeholder. Ambiguous dates, cancellations and changes require review.
+- RSVP deadlines go into notes; missing end times use a 60-minute default. Ambiguous dates, cancellations and changes require review.
 - SQLite tracking of processed email content and event UIDs to reduce duplicate events.
 - Backups before updates; secrets, database and edited n8n workflows are kept outside Git.
 
@@ -87,7 +87,7 @@ Open **School email via iCloud alias → iCloud Calendar** and confirm:
 
 Both the trigger's IMAP filter and the bridge check the intended recipient address. Unrelated mail is ignored before AI extraction, calendar writes. This is recipient scoping, not a sender-authentication mechanism: anyone knowing the alias can send to it, so keep the address private. Forward normally with the alias in To, not Bcc, so both filters can match it.
 
-The IMAP trigger listens for mailbox arrivals. Delivery depends on Outlook forwarding and iCloud, so do not treat it as guaranteed instant delivery. Initial activation can include matching emails from earlier that day. Test with a disposable email first. Attachments are not read.
+The IMAP trigger listens for mailbox arrivals. Delivery depends on Outlook forwarding and iCloud, so do not treat it as guaranteed instant delivery. Initial activation can include matching emails from earlier that day. Test with a disposable email first. PDF, DOCX and DOC attachments are read when using the updated iCloud workflow.
 
 The HTTP Request node calls the private `school-bridge` Docker service. It requires no community nodes or public webhook. The bridge is not exposed on a host port.
 
@@ -127,7 +127,7 @@ Local files:
 - Deterministic CalDAV UIDs and resource URLs make retries reuse the same event resource after an interrupted write.
 - Mail trigger cursors can advance before downstream failures. A failed execution needs a deliberate retry from n8n; retries are protected by the content/event state. If email arrival triggers are mission-critical, add a scheduled reconciliation workflow before relying on this unattended.
 - iCloud connection checks verify credentials and calendar discovery, not write permission. A shared read-only calendar will fail on the first write. Select an owned/writable calendar.
-- The system does not process attachments, or automatically update cancellations/reschedules.
+- The system does not automatically update cancellations/reschedules.
 - AI output is validated for schema, date ordering, London offsets and an evidence excerpt present in the source. It can still misunderstand an email. Review the first live events.
 
 ## Restore
@@ -177,3 +177,29 @@ Setup prompts only for the TextMeBot key (masked confirmation) and recipient pho
 Once enabled, messages contain `Email From School`, the subject and the body with recognised school signature/disclaimer blocks removed. Newlines and full URLs are preserved in requests. Long text is split at up to 3,000 characters per part; actual provider acceptance and rendering require testing. Calendar writes finish before notification sending; notification errors are reported separately and cannot undo saved events. Ambiguous sends are held instead of retried automatically. Existing imported workflows remain compatible.
 
 `sudo n8n-live remove-whatsapp` now removes both old InOut and optional TextMeBot settings. Normal updates remove only obsolete InOut keys and preserve TextMeBot configuration. Your private older backups can still contain the original saved keys.
+
+## Document attachments and cleaner calendar notes
+
+The iCloud workflow now downloads attachments and uses a Code node to transfer actual binary buffers to the private bridge. Supported documents: PDF, DOCX and legacy DOC. Text extraction is local; scanned PDF pages use English Tesseract OCR. Extracted document text is sent to the configured OpenAI API along with the email subject/body. Image attachments such as signature logos are ignored. Image-only Word documents need manual review. Attachments are processed in temporary directories and removed after processing; n8n execution storage can still retain input data.
+
+Limits: 10 documents, 10 MiB each, 20 MiB combined, 30 pages per PDF, 90 seconds combined document processing with at most 45 seconds per document, and 120,000 extracted document characters. Protected, corrupt, unsupported or unreadable documents require review and prevent automatic calendar writes for that email. OCR can misread text; uncertain dates remain subject to event validation/review.
+
+For an existing installation, update the server and reimport the workflow to obtain attachment downloading and the preparation node. This deliberately replaces the task-owned template workflow; record any personal node edits first. Stop/unpublish the old workflow in the editor before importing, then review and publish the imported version again. Do not manually execute old cached test data to test attachments.
+
+```bash
+sudo n8n-live update
+sudo n8n-live import
+```
+
+Assumptions and missing-detail commentary are no longer appended to calendar notes. The structured assumptions stay internal for validation; the default duration remains 60 minutes. Reforwarding an existing message can refresh that event's notes at the same stable CalDAV URL, without creating a second event. Outputs distinguish `events_created` and `events_updated`.
+
+## Overview statistics while testing
+
+```bash
+sudo n8n-live stats-reset  # numbered workflow picker; 0 resets all workflow overview counters
+sudo n8n-live stats        # numbered workflow picker; toggles that workflow's stats pause/resume
+```
+
+The reset backs up Insights tables and briefly stops/restarts n8n so buffered counts are flushed before clearing. It deletes only the selected overview-counter data, not execution logs, workflows, credentials, calendar events or bridge duplicate tracking. Refresh the Overview page afterwards.
+
+The pause helper keeps workflows running and execution history available. It installs a local PostgreSQL trigger on `insights_raw` that zeroes metric values for the selected workflow while paused. Time windows also exclude buffered records flushed after resuming. Counts from before pausing remain. A run is classified by its completion/Insights timestamp. This is a local extension to n8n, not a native n8n feature; schema guards reject incompatible versions. It has been checked against n8n 2.47.5 source and tested with raw-to-counter data in PostgreSQL. Recheck it before upgrading n8n across database schema changes.

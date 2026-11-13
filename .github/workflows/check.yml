@@ -15,6 +15,17 @@ jobs:
       - run: bash -n bootstrap.sh install.sh scripts/n8n-live
       - run: POSTGRES_PASSWORD=test N8N_ENCRYPTION_KEY=test N8N_IMAGE=docker.n8n.io/n8nio/n8n:stable docker compose config --quiet
       - run: docker build -t school-bridge-test bridge
+      - name: Verify PDF, scanned PDF OCR and Word attachment extraction
+        run: docker run --rm -v "$PWD/tests:/tests:ro" school-bridge-test python /tests/document_smoke.py
+      - name: Verify stats pause, resume and reset in PostgreSQL
+        run: |
+          docker run -d --rm --name n8n-stats-test -e POSTGRES_PASSWORD=test postgres:16-alpine
+          for attempt in $(seq 1 30); do
+            if docker exec n8n-stats-test pg_isready -U postgres; then break; fi
+            sleep 1
+          done
+          STATS_TEST_CONTAINER=n8n-stats-test python tests/stats_smoke.py
+          docker stop n8n-stats-test
       - name: Validate public-IP HTTPS configuration
         run: docker run --rm -e N8N_HOST=8.8.8.8 -v "$PWD/Caddyfile.ip:/etc/caddy/Caddyfile:ro" caddy:2-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile --validate > /tmp/caddy-ip.json
       - name: Verify TLS certificate selection without SNI

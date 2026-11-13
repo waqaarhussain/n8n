@@ -50,11 +50,12 @@ def test_content_duplicate_ignores_forward_prefix_and_spacing():
     assert app.fingerprint(*one) == app.fingerprint(*two)
 
 
-def test_missing_end_explicitly_labelled_and_duration_correct():
+def test_missing_end_duration_correct_without_assumptions_in_notes():
     uid, raw = app.prepare_event(example())
     event = app.Calendar.from_ical(raw).walk('VEVENT')[0]
     assert event.decoded('dtend') - event.decoded('dtstart') == timedelta(minutes=60)
-    assert 'placeholder' in str(event['description'])
+    assert 'Assumptions' not in str(event['description'])
+    assert 'placeholder' not in str(event['description'])
     assert uid == app.prepare_event(example())[0]
 
 
