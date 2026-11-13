@@ -88,7 +88,7 @@ def worker(kind, path):
     print(text)
 
 
-def extract_attachments(data):
+def extract_attachments(data, image_reader=None):
     items = data.get('attachments', [])
     issues = list(data.get('attachment_issues', []))
     if not isinstance(items, list) or len(items) > MAX_FILES:
@@ -113,22 +113,31 @@ def extract_attachments(data):
             total += len(raw)
             if not raw or len(raw) > MAX_FILE or total > MAX_TOTAL:
                 raise ValueError('Attachment byte limit exceeded')
-            with tempfile.TemporaryDirectory(prefix='school-document-') as directory:
-                path = Path(directory) / ('input.' + kind)
-                path.write_bytes(raw)
-                output = Path(directory) / 'extracted.txt'
-                with output.open('wb') as target:
-                    result = subprocess.run([sys.executable, str(Path(__file__).resolve()), kind, str(path)],
-                                            stdout=target, stderr=subprocess.DEVNULL, timeout=max(1, min(45, deadline - time.monotonic())))
-                if result.returncode != 0 or output.stat().st_size > MAX_TEXT * 4:
-                    raise ValueError('Attachment extraction failed')
-                text = output.read_text().strip()
-                if not text or len(text) > MAX_TEXT:
-                    raise ValueError('No usable attachment text')
+            if image_reader and kind in ('jpg', 'jpeg', 'png'):
+                text = image_reader(raw, name, max(1, min(45, deadline - time.monotonic())))
+                if not text.strip() or len(text) > MAX_TEXT:
+                    raise ValueError('No usable image text')
+            else:
+                with tempfile.TemporaryDirectory(prefix='school-document-') as directory:
+                    path = Path(directory) / ('input.' + kind)
+                    path.write_bytes(raw)
+                    output = Path(directory) / 'extracted.txt'
+                    with output.open('wb') as target:
+                        result = subprocess.run([sys.executable, str(Path(__file__).resolve()), kind, str(path)],
+                                                stdout=target, stderr=subprocess.DEVNULL, timeout=max(1, min(45, deadline - time.monotonic())))
+                    if result.returncode != 0 or output.stat().st_size > MAX_TEXT * 4:
+                        raise ValueError('Attachment extraction failed')
+                    text = output.read_text().strip()
+                    if not text or len(text) > MAX_TEXT:
+                        raise ValueError('No usable attachment text')
             sections.append(f'Attachment: {name}\n{text}')
             if sum(map(len, sections)) > MAX_TEXT:
                 return '', issues + ['Combined attachment text limit exceeded; review manually.']
-        except (ValueError, OSError, subprocess.SubprocessError, binascii.Error):
+        except (ValueError, OSError, subprocess.SubprocessError, binascii.Error) as exc:
+            from vision import ImageReadError
+            if isinstance(exc, ImageReadError):
+                issues.append(f'{name}: {exc}')
+                continue
             issues.append(f'Could not fully read {name}. It may be protected, corrupt, image-only or over the processing limits. Review manually.')
     return '\n\n'.join(sections), issues
 

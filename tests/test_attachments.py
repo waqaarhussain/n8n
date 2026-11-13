@@ -34,7 +34,7 @@ def test_bad_or_unsupported_attachment_blocks_calendar_before_ai(tmp_path, monke
 
 def test_attachment_changes_invalidate_email_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(app, 'STATE', tmp_path/'state.sqlite3')
-    monkeypatch.setattr(attachments, 'extract_attachments', lambda data: (data['test_document'], []))
+    monkeypatch.setattr(attachments, 'extract_attachments', lambda data, **kwargs: (data['test_document'], []))
     extract = MagicMock(return_value=app.Extraction(needs_review=False, reason='No events', events=[]))
     monkeypatch.setattr(app, 'extract', extract)
     for document in ('First invitation', 'Second invitation'):
@@ -81,7 +81,7 @@ def test_description_contains_only_practical_summary():
 
 def test_generic_email_and_image_text_reach_model_together(tmp_path, monkeypatch):
     monkeypatch.setattr(app, 'STATE', tmp_path/'state.sqlite3')
-    monkeypatch.setattr(attachments, 'extract_attachments', lambda data: (
+    monkeypatch.setattr(attachments, 'extract_attachments', lambda data, **kwargs: (
         'Attachment: winter-fair.jpg\nWinter Fair 27 November 2026. In uniform. 4-5.30pm.', []))
     model = MagicMock(return_value=app.Extraction(needs_review=False, reason='', events=[]))
     monkeypatch.setattr(app, 'extract', model)

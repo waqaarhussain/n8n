@@ -27,7 +27,7 @@ STATE = Path(os.getenv('STATE_PATH', '/data/state.sqlite3'))
 LOCK = threading.Lock()
 LONDON = ZoneInfo('Europe/London')
 log = logging.getLogger('school-bridge')
-EXTRACTION_VERSION = 4
+EXTRACTION_VERSION = 5
 
 
 class ExtractedEvent(BaseModel):
@@ -309,9 +309,14 @@ def process(data, settings=None):
             return {'status': 'ignored', 'reason': 'Email is not addressed to the configured automation alias'}
     title, body, reference = normalise_email(data)
     from attachments import extract_attachments
-    attachment_text, attachment_issues = extract_attachments(data)
+    from vision import transcribe
+    reader = (lambda raw, name, timeout: transcribe(settings, raw, name, timeout)) if settings.get('ai', {}).get('api_key') else None
+    attachment_text, attachment_issues = extract_attachments(data, image_reader=reader)
+    attachment_summary = [{'filename': str(item.get('filename', 'unnamed')), 'mime_type': str(item.get('mimeType', '')),
+                           'reader': 'OpenAI image reading' if reader and str(item.get('filename', '')).lower().endswith(('.jpg', '.jpeg', '.png')) else 'local document/OCR'}
+                          for item in data.get('attachments', []) if isinstance(item, dict)]
     if attachment_issues:
-        return {'status': 'review', 'reason': '; '.join(attachment_issues), 'events_created': 0, 'uncertain_deliveries': 0}
+        return {'status': 'review', 'reason': '; '.join(attachment_issues), 'events_created': 0, 'uncertain_deliveries': 0, 'attachment_summary': attachment_summary}
     if attachment_text:
         body = body + '\n\n' + attachment_text
     if len(body) > 240_000:
@@ -382,7 +387,7 @@ def process(data, settings=None):
         # Legacy published workflows must not fail calendar runs on message errors.
         return {'status': 'review' if review else ('duplicate' if duplicate else 'processed'),
                 'reason': reason, 'events_created': created, 'events_updated': updated,
-                'uncertain_deliveries': 0, 'notification': notification, 'review_details': review_details}
+                'uncertain_deliveries': 0, 'notification': notification, 'review_details': review_details, 'attachment_summary': attachment_summary}
 
 
 
