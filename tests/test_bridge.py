@@ -118,7 +118,9 @@ def test_fabricated_evidence_blocks_calendar(state, monkeypatch):
     monkeypatch.setattr(app, 'extract', lambda *args: app.Extraction(needs_review=False,reason='',events=[example(evidence='not in email')]))
     connect=MagicMock()
     monkeypatch.setattr(app, 'connect_calendar',connect)
-    assert app.process({'subject':'School','body':'Workshop at 2.15pm'}, {})['status']=='review'
+    result = app.process({'subject':'School','body':'Workshop at 2.15pm'}, {})
+    assert result['status']=='review'
+    assert result['review_details'][0]['evidence'] == 'not in email'
     connect.assert_not_called()
 
 
@@ -287,3 +289,11 @@ def test_remove_whatsapp_setup_preserves_mail_ai_calendar(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'argv', ['setup.py', '--remove-whatsapp'])
     setup.main()
     assert json.loads(path.read_text()) == expected
+
+
+def test_evidence_typography_normalises_without_changing_dates():
+    assert app.evidence_text('Winter Fair 27.11.2026\n4–5.30pm') == app.evidence_text('Winter Fair 27.11.2026 4-5.30pm')
+    assert app.evidence_text('Children’s PE kit') == app.evidence_text("Children's PE kit")
+    assert app.evidence_text('16th November') != app.evidence_text('16 November')
+    assert app.evidence_text('27.11.2026') != app.evidence_text('28.11.2026')
+    assert app.evidence_text('2.15pm') != app.evidence_text('2:15pm')

@@ -4,6 +4,7 @@ import subprocess
 OPTIONS = [
     ('stats', 'Pause or resume overview stats for a workflow'),
     ('stats-reset', 'Reset overview stats (keeps execution logs and calendar events)'),
+    ('review-last', 'Show recent email event proposals and supporting quotes'),
     ('status', 'Show service status'),
     ('logs', 'Show recent n8n and calendar bridge logs'),
     ('check-icloud', 'Check iCloud connection without creating events'),

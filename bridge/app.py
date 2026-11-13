@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 import threading
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from zoneinfo import ZoneInfo
@@ -26,7 +27,7 @@ STATE = Path(os.getenv('STATE_PATH', '/data/state.sqlite3'))
 LOCK = threading.Lock()
 LONDON = ZoneInfo('Europe/London')
 log = logging.getLogger('school-bridge')
-EXTRACTION_VERSION = 3
+EXTRACTION_VERSION = 4
 
 
 class ExtractedEvent(BaseModel):
@@ -187,7 +188,11 @@ If the email body is just a generic attachment introduction, write the descripti
 Do not repeat the event title/date/time merely to fill space. If no substantive details exist, summary can be empty.
 Never add Source/Evidence labels, filenames or processing commentary to the description. Use the newest clear event details in quoted threads.
 Each event needs an exact concise title, location if stated, and a short verbatim evidence excerpt supporting
-its date and time. For timed events return ISO 8601 start/end with offsets, e.g. 2026-12-10T14:15:00+00:00.
+its date and time. Evidence MUST be one contiguous exact quote copied from a source, not a paraphrase.
+Do not combine separate subject/body/attachment fragments into a new quote. Preserve source date spelling,
+ordinal suffixes, punctuation and OCR spacing; never replace them with your interpreted ISO date.
+If date and time are in separate places, quote the clearest exact date excerpt and read the other details
+from the remaining sources. For timed events return ISO 8601 start/end with offsets, e.g. 2026-12-10T14:15:00+00:00.
 If end is unstated return null; never invent it.
 When a school activity/reminder has a clear date but NO exact clock start time, use all_day=true with
 YYYY-MM-DD dates. This includes PE-kit reminders and activities described only as morning, afternoon or
@@ -282,6 +287,17 @@ def connect_calendar(settings):
         raise
 
 
+def evidence_text(value):
+    """Normalise display typography only, preserving numbers and date/time punctuation."""
+    value = unicodedata.normalize('NFKC', value)
+    value = value.translate(str.maketrans({
+        '\u2018': "'", '\u2019': "'", '\u201c': '"', '\u201d': '"',
+        '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-', '\u2014': '-',
+        '\u2212': '-', '\u00ad': '', '\u200b': '', '\ufeff': '',
+    }))
+    return re.sub(r'\s+', ' ', value).strip().casefold()
+
+
 def process(data, settings=None):
     settings = settings if settings is not None else config()
     mail_settings = settings.get('mail', {})
@@ -318,16 +334,18 @@ def process(data, settings=None):
             db.execute('INSERT INTO mail (fingerprint, extraction, extraction_version) VALUES (?, ?, ?) ON CONFLICT(fingerprint) DO UPDATE SET extraction=excluded.extraction, extraction_version=excluded.extraction_version', (mail_id, extracted.model_dump_json(), EXTRACTION_VERSION))
             db.commit()
         prepared = []
+        review_details = []
         review = extracted.needs_review
         reason = extracted.reason
         if not review:
             try:
                 # Validate the entire batch before making any calendar writes.
-                source_text = re.sub(r'\s+', ' ', title + ' ' + body).casefold()
+                source_text = evidence_text(title + ' ' + body)
                 for event in extracted.events:
-                    evidence = re.sub(r'\s+', ' ', event.evidence).strip().casefold()
+                    evidence = evidence_text(event.evidence)
                     if not evidence or evidence not in source_text:
-                        raise ValueError('Event evidence was not found in the email; manual review required.')
+                        review_details.append({'title': event.title, 'evidence': event.evidence, 'start': event.start})
+                        raise ValueError('The event supporting quote did not match the email or attachment text. See review_details; manual review required.')
                 prepared = [prepare_event(e, settings.get('default_duration_minutes', 60)) for e in extracted.events]
             except ValueError as exc:
                 review, reason = True, str(exc)
@@ -364,7 +382,7 @@ def process(data, settings=None):
         # Legacy published workflows must not fail calendar runs on message errors.
         return {'status': 'review' if review else ('duplicate' if duplicate else 'processed'),
                 'reason': reason, 'events_created': created, 'events_updated': updated,
-                'uncertain_deliveries': 0, 'notification': notification}
+                'uncertain_deliveries': 0, 'notification': notification, 'review_details': review_details}
 
 
 
