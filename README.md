@@ -180,7 +180,7 @@ Once enabled, messages contain `Email From School`, the subject and the body wit
 
 ## Document attachments and cleaner calendar notes
 
-The iCloud workflow now downloads attachments and uses a Code node to transfer actual binary buffers to the private bridge. Supported documents: PDF, DOCX and legacy DOC. Text extraction is local; scanned PDF pages use English Tesseract OCR. Extracted document text is sent to the configured OpenAI API along with the email subject/body. Image attachments such as signature logos are ignored. Image-only Word documents need manual review. Attachments are processed in temporary directories and removed after processing; n8n execution storage can still retain input data.
+The iCloud workflow now downloads attachments and uses a Code node to transfer actual binary buffers to the private bridge. Supported documents: PDF, DOCX and legacy DOC, plus JPG/JPEG and PNG image flyers. Text extraction is local; scanned PDF pages use English Tesseract OCR. Extracted document text is sent to the configured OpenAI API along with the email subject/body. JPG/PNG attachments are OCR-read, including image flyers. Decorative logos should be ignored by the event extractor. Animated GIF signatures are skipped. Image-only Word documents need manual review. Attachments are processed in temporary directories and removed after processing; n8n execution storage can still retain input data.
 
 Limits: 10 documents, 10 MiB each, 20 MiB combined, 30 pages per PDF, 90 seconds combined document processing with at most 45 seconds per document, and 120,000 extracted document characters. Protected, corrupt, unsupported or unreadable documents require review and prevent automatic calendar writes for that email. OCR can misread text; uncertain dates remain subject to event validation/review.
 
@@ -191,7 +191,7 @@ sudo n8n-live update
 sudo n8n-live import
 ```
 
-Assumptions and missing-detail commentary are no longer appended to calendar notes. The structured assumptions stay internal for validation; the default duration remains 60 minutes. Reforwarding an existing message can refresh that event's notes at the same stable CalDAV URL, without creating a second event. Outputs distinguish `events_created` and `events_updated`.
+Calendar descriptions contain only the practical event summary. Source, Evidence, assumptions and missing-detail commentary are not appended. Evidence and structured assumptions stay internal for validation; the default duration remains 60 minutes. Reforwarding an existing message can refresh that event's notes at the same stable CalDAV URL, without creating a second event. Outputs distinguish `events_created` and `events_updated`.
 
 ## Overview statistics while testing
 
@@ -209,3 +209,5 @@ The pause helper keeps workflows running and execution history available. It ins
 Run `helper` for a numbered menu with a description of every n8n maintenance command. Selecting a command continues its existing flow, including the workflow picker for stats. The selected helper reacquires the maintenance lock normally; menu dispatch releases its own lock first. This menu covers this n8n project, not unrelated applications on your server.
 
 For an installation predating the menu, run `sudo n8n-live update`, then `sudo n8n-live helper` once. That first menu invocation also installs the `helper` shortcut. If a different application already owns `/usr/local/bin/helper`, it is preserved; use `sudo n8n-live helper` for this menu.
+
+The extractor compares the subject, email prose and every readable attachment to find the actual event name and useful practical notes. Generic subjects such as Flyer and forwarding prose such as FYI/see attached do not become event titles or descriptions. Uniform requirements, costs, RSVP details, what to bring and collection instructions can be included when supported by a source. Old cached extractions refresh once after this extraction-rule update, while stable event identity and duplicate protection remain. Image OCR and final model interpretation still require a live test with your actual flyer.

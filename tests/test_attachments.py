@@ -68,3 +68,39 @@ def test_saved_legacy_event_notes_are_refreshed_without_new_uid(tmp_path, monkey
     assert 'Assumptions' not in saved and 'Year inferred' not in saved
     from urllib.parse import unquote
     assert unquote(remote.call_args.kwargs['url']).endswith(uid + '.ics')
+
+
+def test_description_contains_only_practical_summary():
+    from test_bridge import example
+    event = example(summary='Wear school uniform. Collection is at the main gate.')
+    _, raw = app.prepare_event(event)
+    item = app.Calendar.from_ical(raw).walk('VEVENT')[0]
+    assert str(item['description']) == event.summary
+    assert 'Evidence:' not in str(item['description']) and 'Source:' not in str(item['description'])
+
+
+def test_generic_email_and_image_text_reach_model_together(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, 'STATE', tmp_path/'state.sqlite3')
+    monkeypatch.setattr(attachments, 'extract_attachments', lambda data: (
+        'Attachment: winter-fair.jpg\nWinter Fair 27 November 2026. In uniform. 4-5.30pm.', []))
+    model = MagicMock(return_value=app.Extraction(needs_review=False, reason='', events=[]))
+    monkeypatch.setattr(app, 'extract', model)
+    app.process({'subject': 'Flyer', 'body': 'FYI please see attached.'}, {})
+    assert model.call_args.args[1] == 'Flyer'
+    body = model.call_args.args[2]
+    assert 'FYI please see attached.' in body and 'Winter Fair' in body and 'In uniform' in body
+
+
+def test_legacy_model_cache_refreshes_once_under_new_extraction_rules(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, 'STATE', tmp_path/'state.sqlite3')
+    data = {'subject': 'Flyer', 'body': 'Please see attached.'}
+    extraction = app.Extraction(needs_review=False, reason='', events=[])
+    identity = app.fingerprint(data['subject'], data['body'])
+    with app.database() as db:
+        db.execute('INSERT INTO mail (fingerprint, extraction) VALUES (?, ?)', (identity, extraction.model_dump_json()))
+        db.commit()
+    model = MagicMock(return_value=extraction)
+    monkeypatch.setattr(app, 'extract', model)
+    app.process(data, {})
+    app.process(data, {})
+    assert model.call_count == 1

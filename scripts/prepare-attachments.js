@@ -5,10 +5,12 @@ for (let i = 0; i < items.length; i++) {
   const issues = [];
   let total = 0;
   for (const [key, file] of Object.entries(items[i].binary || {})) {
-    const filename = file.fileName || key;
+    let filename = file.fileName || key;
     const mime = file.mimeType || '';
-    if (mime.startsWith('image/')) continue; // inline signatures/logos
-    if (!/\.(pdf|docx?)$/i.test(filename)) {
+    const imageExtension = {'image/jpeg': 'jpg', 'image/png': 'png'}[mime.toLowerCase()];
+    if (imageExtension && !/\.(jpe?g|png)$/i.test(filename)) filename += '.' + imageExtension;
+    if (mime === 'image/gif') continue; // animated/inline signature graphics are not supported
+    if (!/\.(pdf|docx?|jpe?g|png)$/i.test(filename)) {
       issues.push('Unsupported attachment: ' + filename + '. Review manually.');
       continue;
     }

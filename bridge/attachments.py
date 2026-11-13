@@ -77,6 +77,10 @@ def worker(kind, path):
         text = extract_pdf(path)
     elif kind == 'docx':
         text = extract_docx(path)
+    elif kind in ('jpg', 'jpeg', 'png'):
+        text = command(['tesseract', str(path), 'stdout', '-l', 'eng'], timeout=40)
+        if not text.strip():
+            text = '[No readable text detected in this image.]'
     else:
         text = command(['antiword', '-m', 'UTF-8.txt', str(path)])
     if not text.strip() or len(text) > MAX_TEXT:
@@ -98,7 +102,7 @@ def extract_attachments(data):
             continue
         name = Path(str(item.get('filename', f'document-{index}'))).name[:180]
         kind = Path(name).suffix.lower().lstrip('.')
-        if kind not in ('pdf', 'doc', 'docx'):
+        if kind not in ('pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'):
             issues.append(f'Unsupported attachment: {name}. Review manually.')
             continue
         try:

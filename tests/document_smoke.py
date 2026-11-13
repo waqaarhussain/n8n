@@ -66,8 +66,19 @@ def scanned_pdf():
                     f'<< /Length {len(content)} >>\nstream\n'.encode()+content+b'\nendstream'])
 
 
+def image_bytes(kind):
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory)/'original.pdf'
+        path.write_bytes(text_pdf())
+        target = Path(directory)/'flyer'
+        subprocess.run(['pdftoppm', '-singlefile', '-scale-to', '2400',
+                        '-jpeg' if kind == 'jpg' else '-png', str(path), str(target)],
+                       check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return target.with_suffix('.' + kind).read_bytes()
+
+
 def main():
-    for name, raw in [('invite.docx', docx_bytes()), ('invite.pdf', text_pdf()), ('scan.pdf', scanned_pdf())]:
+    for name, raw in [('invite.docx', docx_bytes()), ('invite.pdf', text_pdf()), ('scan.pdf', scanned_pdf()), ('flyer.jpg', image_bytes('jpg')), ('flyer.png', image_bytes('png'))]:
         text, issues = attachments.extract_attachments({'attachments': [{'filename': name, 'data': base64.b64encode(raw).decode()}]})
         assert not issues, (name, issues)
         assert '10December2026' in re.sub(r'\s+', '', text), (name, text)

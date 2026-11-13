@@ -27,7 +27,7 @@
     {
       "parameters": {
         "mode": "runOnceForAllItems",
-        "jsCode": "const items = $input.all();\nconst result = [];\nfor (let i = 0; i < items.length; i++) {\n  const attachments = [];\n  const issues = [];\n  let total = 0;\n  for (const [key, file] of Object.entries(items[i].binary || {})) {\n    const filename = file.fileName || key;\n    const mime = file.mimeType || '';\n    if (mime.startsWith('image/')) continue; // inline signatures/logos\n    if (!/\\.(pdf|docx?)$/i.test(filename)) {\n      issues.push('Unsupported attachment: ' + filename + '. Review manually.');\n      continue;\n    }\n    if (attachments.length >= 10) { issues.push('More than 10 documents; review manually.'); break; }\n    const buffer = await this.helpers.getBinaryDataBuffer(i, key);\n    total += buffer.length;\n    if (buffer.length > 10 * 1024 * 1024 || total > 20 * 1024 * 1024) {\n      issues.push('Document size limit exceeded; review manually.'); break;\n    }\n    attachments.push({filename, mimeType: mime, data: buffer.toString('base64')});\n  }\n  result.push({json: {...items[i].json, attachments, attachment_issues: issues}, pairedItem: {item: i}});\n}\nreturn result;"
+        "jsCode": "const items = $input.all();\nconst result = [];\nfor (let i = 0; i < items.length; i++) {\n  const attachments = [];\n  const issues = [];\n  let total = 0;\n  for (const [key, file] of Object.entries(items[i].binary || {})) {\n    let filename = file.fileName || key;\n    const mime = file.mimeType || '';\n    const imageExtension = {'image/jpeg': 'jpg', 'image/png': 'png'}[mime.toLowerCase()];\n    if (imageExtension && !/\\.(jpe?g|png)$/i.test(filename)) filename += '.' + imageExtension;\n    if (mime === 'image/gif') continue; // animated/inline signature graphics are not supported\n    if (!/\\.(pdf|docx?|jpe?g|png)$/i.test(filename)) {\n      issues.push('Unsupported attachment: ' + filename + '. Review manually.');\n      continue;\n    }\n    if (attachments.length >= 10) { issues.push('More than 10 documents; review manually.'); break; }\n    const buffer = await this.helpers.getBinaryDataBuffer(i, key);\n    total += buffer.length;\n    if (buffer.length > 10 * 1024 * 1024 || total > 20 * 1024 * 1024) {\n      issues.push('Document size limit exceeded; review manually.'); break;\n    }\n    attachments.push({filename, mimeType: mime, data: buffer.toString('base64')});\n  }\n  result.push({json: {...items[i].json, attachments, attachment_issues: issues}, pairedItem: {item: i}});\n}\nreturn result;\n"
       },
       "id": "prepare-documents",
       "name": "Prepare email and documents",
@@ -107,7 +107,7 @@
     },
     {
       "parameters": {
-        "content": "## iCloud Mail setup before publishing\n1. Create an IMAP credential: PRIMARY iCloud Mail address, app-specific password, imap.mail.me.com, port 993, SSL/TLS enabled.\n2. Replace YOUR_N8N_ALIAS@icloud.com in Custom Email Rules with your automation alias.\n3. Run n8n-setup on your server and enter that same alias.\n4. Keep Format=Simple; Action=Nothing.\n5. Outlook rule forwards only school messages to the alias.\n\nNo Microsoft app registration. The alias shares your primary mailbox. Mail need not be enabled in the phone app. IMAP listens for arrivals; delivery timing depends on both providers. Initial activation can include matching mail from today. Test with a disposable message.\nDownload Attachments=ON. PDF/DOC/DOCX text is read locally, with scanned PDF OCR. Limits: 10 documents, 10MB each, 20MB combined, 30 PDF pages. Unreadable documents require review. Image attachments are ignored.",
+        "content": "## iCloud Mail setup before publishing\n1. Create an IMAP credential: PRIMARY iCloud Mail address, app-specific password, imap.mail.me.com, port 993, SSL/TLS enabled.\n2. Replace YOUR_N8N_ALIAS@icloud.com in Custom Email Rules with your automation alias.\n3. Run n8n-setup on your server and enter that same alias.\n4. Keep Format=Simple; Action=Nothing.\n5. Outlook rule forwards only school messages to the alias.\n\nNo Microsoft app registration. The alias shares your primary mailbox. Mail need not be enabled in the phone app. IMAP listens for arrivals; delivery timing depends on both providers. Initial activation can include matching mail from today. Test with a disposable message.\nDownload Attachments=ON. PDF/DOC/DOCX and JPG/PNG flyer text is read locally, with scanned PDF OCR. Limits: 10 documents, 10MB each, 20MB combined, 30 PDF pages. Unreadable documents require review. JPG/PNG images use OCR. Unreadable essential flyers require review; decorative logos can be ignored.",
         "height": 470,
         "width": 430
       },
@@ -174,7 +174,7 @@
     "saveDataSuccessExecution": "all",
     "saveDataErrorExecution": "all"
   },
-  "versionId": "954a788a-99f3-493b-ade9-e4c295a5ce75",
+  "versionId": "c9233b12-6e3c-42fc-adbb-647e6c0c3c54",
   "pinData": {},
   "tags": []
 }
