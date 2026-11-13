@@ -26,7 +26,7 @@ STATE = Path(os.getenv('STATE_PATH', '/data/state.sqlite3'))
 LOCK = threading.Lock()
 LONDON = ZoneInfo('Europe/London')
 log = logging.getLogger('school-bridge')
-EXTRACTION_VERSION = 2
+EXTRACTION_VERSION = 3
 
 
 class ExtractedEvent(BaseModel):
@@ -178,13 +178,23 @@ Read the subject, email prose and ALL attachment text together before choosing t
 Generic subjects like Flyer, FYI, Newsletter, Invitation or Please see attached are not event titles.
 Use the actual event name found in the most informative source, including a flyer or document.
 Ignore forwarding introductions, greetings, signatures, legal disclaimers and phrases like FYI/see attached.
-Descriptions contain only useful practical details supported by the sources. Do not repeat the event title,
-date or time merely to fill space. If no extra practical details exist, summary can be an empty string.
+Descriptions must retain the full substantive wording of the email paragraphs relevant to that event,
+rather than replacing a useful email body with a short summary. Remove only greetings, forwarding headers,
+generic FYI/see-attached wording, signatures and legal disclaimers. Preserve instructions, explanations,
+who is involved and what the parent/child needs to do. For multiple events, use the paragraphs relevant
+to each event, not the whole unrelated newsletter. Add useful attachment details not already in those paragraphs.
+If the email body is just a generic attachment introduction, write the description from the attachment instead.
+Do not repeat the event title/date/time merely to fill space. If no substantive details exist, summary can be empty.
 Never add Source/Evidence labels, filenames or processing commentary to the description. Use the newest clear event details in quoted threads.
 Each event needs an exact concise title, location if stated, and a short verbatim evidence excerpt supporting
 its date and time. For timed events return ISO 8601 start/end with offsets, e.g. 2026-12-10T14:15:00+00:00.
-If end is unstated return null; never invent it. Use all_day=true only for explicit all-day/date-only school
-activities, returning YYYY-MM-DD dates. All-day end is exclusive when an actual date range is stated.
+If end is unstated return null; never invent it.
+When a school activity/reminder has a clear date but NO exact clock start time, use all_day=true with
+YYYY-MM-DD dates. This includes PE-kit reminders and activities described only as morning, afternoon or
+after school. Preserve that period in the description; never invent a clock time for it. A missing exact
+time alone does not require review when the date and activity are clear. An all-day entry is a date marker,
+not a claim that the activity lasts the whole day. All-day end is exclusive when an actual date range is stated.
+When an exact start time is given but no end, use all_day=false and end=null; the configured default applies.
 If a year is missing, infer only when the reference email date and context make the intended upcoming year
 clear and record the inference in assumptions. Ambiguous/conflicting dates or times require needs_review=true;
 do not force a guess. A cancelled or rescheduled existing event requires manual review; do not create a

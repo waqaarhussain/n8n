@@ -104,3 +104,24 @@ def test_legacy_model_cache_refreshes_once_under_new_extraction_rules(tmp_path, 
     app.process(data, {})
     app.process(data, {})
     assert model.call_count == 1
+
+
+def test_date_only_school_visit_keeps_full_useful_body_as_all_day(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    from test_bridge import example
+    monkeypatch.setattr(app, 'STATE', tmp_path/'state.sqlite3')
+    day = (datetime.now(app.LONDON) + timedelta(days=3)).date()
+    text = 'Pre-prep, Nursery and Reception will have a visit from Aston Villa Tots in the afternoon for a PE and football skills workshop. Please send your child in her PE kit.'
+    event = example(title='Aston Villa Tots visit', start=day.isoformat(), end=None,
+                    all_day=True, summary=text, evidence='Aston Villa Tots')
+    monkeypatch.setattr(app, 'extract', lambda *args: app.Extraction(needs_review=False, reason='', events=[event]))
+    client, calendar, remote = MagicMock(), MagicMock(), MagicMock()
+    calendar.url = 'https://example.com/calendar/'
+    monkeypatch.setattr(app, 'connect_calendar', lambda _: (client, calendar))
+    monkeypatch.setattr(app.caldav, 'Event', remote)
+    result = app.process({'subject': 'Aston Villa Tots visit', 'body': text}, {})
+    assert result['events_created'] == 1
+    saved = app.Calendar.from_ical(remote.call_args.kwargs['data']).walk('VEVENT')[0]
+    assert saved.decoded('dtstart') == day
+    assert saved.decoded('dtend') == day + timedelta(days=1)
+    assert str(saved['description']) == text
