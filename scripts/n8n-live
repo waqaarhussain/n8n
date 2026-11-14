@@ -53,7 +53,10 @@ case "$cmd" in
     ;;
   check-icloud) docker compose exec -T school-bridge python setup.py --check ;;
   check-mail) docker compose exec -T school-bridge python mailbox_check.py ;;
-  import) python3 scripts/import-school.py ;;
+  import)
+    docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 school-bridge python setup.py --select-calendar
+    python3 scripts/import-school.py
+    ;;
   web)
     python3 scripts/environment.py --web
     docker compose config --quiet

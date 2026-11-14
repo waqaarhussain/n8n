@@ -27,12 +27,14 @@ sudo bash /tmp/n8n-bootstrap.sh
 The installer clones to `/opt/waqaar-n8n`, installs Ubuntu's Docker packages if Docker is absent, and asks for:
 
 1. **Your server public IPv4 address**, or a hostname such as `n8n.example.com`. The web UI opens at `https://YOUR_IP` with no port suffix. Ports 80/443 must be reachable from the internet and free for the bundled HTTPS proxy. Public-IP certificate issuance uses HTTP validation on port 80. For a hostname, DNS must point to this server. Leave blank for an SSH tunnel instead. The installer does not modify your firewall.
-2. **Apple Account email and an app-specific password**. Generate one at https://account.apple.com/ under Sign-In and Security → App-Specific Passwords. Apple two-factor authentication must be enabled. Do not use your normal Apple password.
-3. **An iCloud calendar**, selected from the discovered list. Create a separate `School` calendar in Apple Calendar first if wanted. No new calendar is silently created and no default-calendar fallback is used.
-4. **An OpenAI API key**, used for event extraction. ChatGPT Plus does not include API billing. Blank leaves extraction unconfigured. The default model is `gpt-4.1-mini` and can be changed during setup.
-5. **iCloud Mail primary address and forwarding alias**. The wizard checks IMAP login without changing messages. An alias shares the primary mailbox; use the primary iCloud Mail address to authenticate. iCloud Mail can remain disabled in the phone Mail app.
+2. **Apple Account email and an app-specific password**. Generate one at https://account.apple.com/ under Sign-In and Security → App-Specific Passwords. The Apple Account defaults to `waqaar06@hotmail.com`. Do not use your normal Apple password.
+3. **An OpenAI API key**, used for event extraction. ChatGPT Plus does not include API billing. The shared model is fixed to `gpt-6.1-sol`.
 
-The setup wizard lists calendars but does not write a test event. OpenAI API key prompts show a masked first/last-character confirmation after entry; Apple passwords remain hidden. Short keys are masked more heavily.
+The primary mail login is fixed to `hackdroid@icloud.com` and the forwarding alias to `waqaarn8n@icloud.com`. Setup verifies read-only IMAP access and can reuse the Apple app-specific password. These addresses and the model are public project defaults; passwords and API keys stay only on your server.
+
+General setup does not ask for a calendar. Run `sudo n8n-live import` to discover calendars and choose one by number before importing the email workflow. No calendar is created automatically. The bridge currently has one shared calendar destination, so importing again changes that destination for all workflows using this bridge.
+
+API key entry shows a live masked first/last-character preview in an interactive terminal and confirms it after Enter. Short keys are masked more heavily; Apple passwords remain hidden. Without a terminal, the prompt falls back to hidden entry followed by masked confirmation.
 
 For local access, run this **on your computer**, keeping SSH open:
 
@@ -60,13 +62,7 @@ The rule must act on new arrivals, not depend on somebody manually moving a mess
 
 ### Import and configure
 
-During the server setup wizard, enter:
-
-- Your **primary iCloud Mail address** as the IMAP user. The automation alias is not the login.
-- An Apple app-specific password. The wizard can reuse the calendar app-specific password when it is the same Apple Account.
-- The **automation alias** that receives school forwards.
-
-The wizard verifies `imap.mail.me.com`, port `993`, TLS, and read-only access to `INBOX`. It does not enable Mail on your phone.
+Setup uses the saved primary iCloud login and forwarding alias above. Supply an Apple app-specific password. The wizard verifies `imap.mail.me.com`, port `993`, TLS, and read-only access to `INBOX`. It does not enable Mail on your phone.
 
 After creating your n8n owner account in the browser:
 
@@ -74,7 +70,7 @@ After creating your n8n owner account in the browser:
 sudo n8n-live import
 ```
 
-This imports your configured IMAP credential into n8n's encrypted credential store and substitutes the saved alias into the workflow. Temporary credential import files are removed afterwards. The workflow is **inactive** until you review and publish it. No email addresses or secrets from your local setup are committed to this public repository.
+This imports your configured IMAP credential into n8n's encrypted credential store and substitutes the saved alias into the workflow. Temporary credential import files are removed afterwards. The workflow is **inactive** until you review and publish it. The fixed email-address defaults are public; credentials and API keys are never committed.
 
 Open **School email via iCloud alias → iCloud Calendar** and confirm:
 
@@ -233,3 +229,7 @@ The template keeps normal IMAP arrival handling but forces reconnect/catch-up ev
 For an existing published workflow, avoid importing over your edits: open Watch iCloud school alias, set Options → Force Reconnect Every Minutes to 1, save and publish that change. There is no need to reset email/event history. This setting must be applied in the UI; a server code update alone does not overwrite your published node parameters.
 
 `sudo n8n-live check-mail` (also in `helper`) logs into the saved primary iCloud mailbox, opens INBOX read-only and lists the latest five messages matching the automation alias with their internal mailbox-arrival timestamps, subjects and To addresses. It fetches headers with BODY.PEEK, does not change seen flags, does not read message bodies and does not print passwords. Use it to separate provider delivery delays from a trigger/listener issue. The UTC/London date changing at midnight does not itself stop an already-published IMAP trigger.
+
+## Moving to a fresh VPS
+
+The bootstrap command installs a fresh instance. It does not transfer old n8n users, workflow edits, duplicate history, stats or encrypted credentials. Restore a private backup if those must carry over. For a fresh install, configure credentials, create the n8n owner account, run `sudo n8n-live import`, choose the calendar, then publish. Disable the old VPS workflow before publishing the new one so both listeners do not process the same emails. Keep the old VPS available until the new one passes a real email test.

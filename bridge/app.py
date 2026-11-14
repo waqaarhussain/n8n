@@ -215,7 +215,7 @@ conflicting or uncertain dates must not be guessed. Missing location can be an e
         response = client.post('https://api.openai.com/v1/chat/completions', headers={
             'Authorization': 'Bearer ' + key,
         }, json={
-            'model': settings.get('ai', {}).get('model', 'gpt-4.1-mini'),
+            'model': settings.get('ai', {}).get('model', 'gpt-6.1-sol'),
             'messages': [
                 {'role': 'system', 'content': system},
                 {'role': 'user', 'content': json.dumps({'reference_date': reference, 'subject': subject, 'body': body})},
@@ -280,7 +280,7 @@ def connect_calendar(settings):
         calendars = client.principal().calendars()
         matches = [c for c in calendars if str(c.url) == icloud.get('calendar_url')]
         if len(matches) != 1:
-            raise ValueError('Configured iCloud calendar not found. Run n8n-setup to select it again.')
+            raise ValueError('Configured iCloud calendar not found. Run n8n-live import to select it again.')
         return client, matches[0]
     except Exception:
         client.close()

@@ -21,7 +21,7 @@ def transcribe(settings, raw, filename, timeout=45):
         mime = 'image/jpeg'
     else:
         raise ImageReadError('Image format does not match a supported PNG/JPEG file.')
-    model = ai.get('model', 'gpt-4.1-mini')
+    model = ai.get('model', 'gpt-6.1-sol')
     identity = hashlib.sha256(b'vision-transcript-v1\0' + model.encode() + b'\0' + raw).hexdigest()
     from app import database
     with database() as db:
