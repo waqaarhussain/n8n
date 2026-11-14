@@ -7,13 +7,13 @@ def test_helper_menu_number_continues_selected_flow(monkeypatch):
     spec = importlib.util.spec_from_file_location('helper_menu', path)
     menu = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(menu)
-    inputs = iter(['bad', '1'])
+    inputs = iter(['bad', str(next(i for i, (command, _) in enumerate(menu.OPTIONS, 1) if command == 'stats'))])
     monkeypatch.setattr('builtins.input', lambda _: next(inputs))
     assert menu.choose() == 'stats'
     monkeypatch.setattr('builtins.input', lambda _: '0')
     assert menu.choose() is None
     commands = {command for command, _ in menu.OPTIONS}
-    assert {'stats', 'stats-reset', 'school-import', 'update', 'check-icloud'} <= commands
+    assert {'stats', 'stats-reset', 'school-import', 'telegram', 'update', 'check-icloud'} <= commands
 
 
 def test_shortcut_install_is_idempotent_and_preserves_other_commands(tmp_path):

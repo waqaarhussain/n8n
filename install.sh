@@ -32,7 +32,7 @@ if ! grep -q '^N8N_IMAGE=.*@sha256:' .env; then
 fi
 docker compose config --quiet
 docker compose build school-bridge
-# The wizard verifies iCloud and writes a selected calendar URL. Secrets stay local.
+# The wizard saves shared credentials; school-import selects the calendar later.
 if [[ ! -f config/settings.json ]]; then
   docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 school-bridge python setup.py
 fi
@@ -51,4 +51,8 @@ if grep -qx 'COMPOSE_PROFILES=https' .env; then
   docker compose pull caddy
 fi
 docker compose up -d --wait --wait-timeout 180
+python3 scripts/install-telegram.py
+if [[ ! -f config/telegram.json ]]; then
+  python3 scripts/telegram.py setup
+fi
 python3 scripts/finish.py

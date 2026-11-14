@@ -233,3 +233,32 @@ For an existing published workflow, avoid importing over your edits: open Watch 
 ## Moving to a fresh VPS
 
 The bootstrap command installs a fresh instance. It does not transfer old n8n users, workflow edits, duplicate history, stats or encrypted credentials. Restore a private backup if those must carry over. For a fresh install, configure credentials, create the n8n owner account, run `sudo school-import`, choose the calendar, then publish. Disable the old VPS workflow before publishing the new one so both listeners do not process the same emails. Keep the old VPS available until the new one passes a real email test.
+
+## Telegram failure alerts for selected workflows
+
+Telegram alerts are optional and work across this n8n installation, not only the school integration. **Every workflow starts OFF**, including school and workflows created/imported later. `school-import` never subscribes it automatically.
+
+The fresh VPS installer offers Telegram setup. Paste your bot token at the hidden prompt (a masked first/last-character confirmation follows). Open the one-time private bot link printed by the wizard and press Start, then return to the terminal. The wizard matches that exact private Start message and sends one connection test; it never guesses the recipient from another chat. Use a dedicated alert bot without an existing webhook. If setup is skipped, the helper can configure it later.
+
+After importing/creating a workflow, run:
+
+```bash
+sudo telegram
+```
+
+The numbered list shows every workflow and its current ON/OFF state. Pick a number to toggle failure alerts for that workflow. Pick `s` to replace a revoked token/reconnect the private chat, `t` for a connection test, or `0` to exit. The same flow is in `helper`. Updating the token preserves the selected workflows; connecting Telegram alone does not add subscriptions. `update-live` remains the updater.
+
+Alerts show the workflow name, Failed/Crashed status, London time, execution ID and an **Open failed execution** button. Raw error details, email bodies, attachments, input data, tokens and stack traces are not sent. Open the failed execution to see the actual reason. No workflow nodes or settings are rewritten and no republish is needed to toggle alerts.
+
+A separate `n8n-telegram.service` checks saved n8n executions every 20 seconds. Only executions created after a workflow's latest enable time qualify; older failures are not replayed. Error and crashed statuses qualify; canceled, successful and in-progress executions do not. Manual failed executions qualify if n8n saves them. Keep failure execution saving enabled for monitored workflows. A workflow that never triggers creates no failed execution, so this is not an incoming-email or whole-VPS outage alarm.
+
+Delivery state persists across restarts and successful sends are deduplicated. Telegram/network failures back off and retry while the failed execution is retained in n8n. An ambiguous network timeout or a crash after Telegram accepts a send can still produce a duplicate on retry. Very busy failure queues take longer; the poll interval is not a delivery guarantee. If this VPS/database is down, alerts cannot be sent until it recovers. Old records pruned before delivery cannot be recovered by the monitor.
+
+The monitor reads n8n tables in read-only transactions and validates the required schema. Its root-only token/chat settings are in `config/telegram.json`; opt-in and delivery state are in `data/telegram.sqlite3`. Both are included in private maintenance backups. The bot token is never embedded in the repository, workflow exports or curl command. Backup pauses the monitor while copying SQLite state. Setup/update install the systemd service without enabling any additional workflows.
+
+Monitor status/logs:
+
+```bash
+sudo systemctl status n8n-telegram.service
+sudo journalctl -u n8n-telegram.service -n 30 --no-pager
+```

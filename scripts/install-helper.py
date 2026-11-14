@@ -16,6 +16,7 @@ def main():
     target = Path('/usr/local/bin/n8n-live')
     install_shortcut(Path('/usr/local/bin/helper'), target, 'sudo n8n-live helper')
     install_shortcut(Path('/usr/local/bin/school-import'), target, 'sudo n8n-live school-import')
+    install_shortcut(Path('/usr/local/bin/telegram'), target, 'sudo n8n-live telegram')
 
 
 if __name__ == '__main__':

@@ -9,3 +9,5 @@ print('The imported workflow filters the saved forwarding alias. See README.md.'
 print('Update: sudo update-live (or sudo n8n-live update if another project already owns update-live).')
 print('Reconfigure iCloud/AI: n8n-setup')
 print('Read-only iCloud check: n8n-live check-icloud')
+
+print('Telegram failure alerts: sudo telegram (choose workflows; all start OFF).')

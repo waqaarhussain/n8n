@@ -2,6 +2,7 @@
 import subprocess
 
 OPTIONS = [
+    ('telegram', 'Choose workflows for Telegram failure alerts, test or change bot'),
     ('stats', 'Pause or resume overview stats for a workflow'),
     ('stats-reset', 'Reset overview stats (keeps execution logs and calendar events)'),
     ('review-last', 'Show recent email event proposals and supporting quotes'),
