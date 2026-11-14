@@ -225,3 +225,11 @@ Evidence matching normalises display typography (curly quotes, Unicode dashes, w
 Conventional local OCR can miss large decorative date/time banners. JPG/PNG images now use the configured OpenAI model's image input, producing a text transcription before event extraction. The separate transcription request uses the existing OpenAI API key/model and is billed as additional API usage. Successful image transcripts are cached by file content and model. No new key is required. Image-support failures are surfaced for review rather than silently accepting incomplete local OCR.
 
 Processing output includes `attachment_summary`: filenames, MIME types and the reader used, without binary data or API keys. An empty list means no attachment bytes reached the bridge. In that case inspect the preparation node and ensure the image was forwarded as an actual attachment; browser-visible externally hosted email images are not fetched automatically. The Review email node terminates that execution, not waits for a browser acknowledgement. Other published executions do not require dismissing its error toast.
+
+## Mail listener catch-up
+
+The template keeps normal IMAP arrival handling but forces reconnect/catch-up every minute. This is a backstop for a mailbox connection whose arrival notifications stop, not a guarantee about Outlook/iCloud delivery speed. The n8n 2.47.5 IMAP connection implementation invokes `catchUp()` after reopening the mailbox.
+
+For an existing published workflow, avoid importing over your edits: open Watch iCloud school alias, set Options → Force Reconnect Every Minutes to 1, save and publish that change. There is no need to reset email/event history. This setting must be applied in the UI; a server code update alone does not overwrite your published node parameters.
+
+`sudo n8n-live check-mail` (also in `helper`) logs into the saved primary iCloud mailbox, opens INBOX read-only and lists the latest five messages matching the automation alias with their internal mailbox-arrival timestamps, subjects and To addresses. It fetches headers with BODY.PEEK, does not change seen flags, does not read message bodies and does not print passwords. Use it to separate provider delivery delays from a trigger/listener issue. The UTC/London date changing at midnight does not itself stop an already-published IMAP trigger.

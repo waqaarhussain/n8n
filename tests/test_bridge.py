@@ -170,6 +170,7 @@ def test_icloud_alias_workflow_is_scoped_and_inactive():
     assert node['type']=='n8n-nodes-base.emailReadImap'
     assert node['parameters']['format']=='simple'
     assert node['parameters']['postProcessAction']=='nothing'
+    assert node['parameters']['options']['forceReconnect']==1
     assert json.loads(node['parameters']['options']['customEmailConfig']) == ['ALL',['TO','YOUR_N8N_ALIAS@icloud.com']]
     assert not workflow['active']
 

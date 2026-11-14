@@ -4,6 +4,6 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils tesseract-ocr tesseract-ocr-eng antiword && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --uid 1000 --create-home bridge
-COPY app.py setup.py textmebot.py attachments.py review.py vision.py ./
+COPY app.py setup.py textmebot.py attachments.py review.py vision.py mailbox_check.py ./
 USER 1000:1000
 CMD ["python", "app.py"]

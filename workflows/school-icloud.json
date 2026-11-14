@@ -11,7 +11,7 @@
         "format": "simple",
         "options": {
           "customEmailConfig": "[\"ALL\", [\"TO\", \"YOUR_N8N_ALIAS@icloud.com\"]]",
-          "forceReconnect": 60,
+          "forceReconnect": 1,
           "trackLastMessageId": true
         }
       },
@@ -107,8 +107,8 @@
     },
     {
       "parameters": {
-        "content": "## iCloud Mail setup before publishing\n1. Create an IMAP credential: PRIMARY iCloud Mail address, app-specific password, imap.mail.me.com, port 993, SSL/TLS enabled.\n2. Replace YOUR_N8N_ALIAS@icloud.com in Custom Email Rules with your automation alias.\n3. Run n8n-setup on your server and enter that same alias.\n4. Keep Format=Simple; Action=Nothing.\n5. Outlook rule forwards only school messages to the alias.\n\nNo Microsoft app registration. The alias shares your primary mailbox. Mail need not be enabled in the phone app. IMAP listens for arrivals; delivery timing depends on both providers. Initial activation can include matching mail from today. Test with a disposable message.\nDownload Attachments=ON. PDF/DOC/DOCX and JPG/PNG flyer text is read locally, with scanned PDF OCR. Limits: 10 documents, 10MB each, 20MB combined, 30 PDF pages. Unreadable documents require review. JPG/PNG images use OCR. Unreadable essential flyers require review; decorative logos can be ignored.",
-        "height": 470,
+        "content": "## iCloud Mail setup before publishing\n1. Create an IMAP credential: PRIMARY iCloud Mail address, app-specific password, imap.mail.me.com, port 993, SSL/TLS enabled.\n2. Replace YOUR_N8N_ALIAS@icloud.com in Custom Email Rules with your automation alias.\n3. Run n8n-setup on your server and enter that same alias.\n4. Keep Format=Simple; Action=Nothing.\n5. Outlook rule forwards only school messages to the alias.\n\nNo Microsoft app registration. The alias shares your primary mailbox. Mail need not be enabled in the phone app. IMAP listens for arrivals; delivery timing depends on both providers. Initial activation can include matching mail from today. Test with a disposable message.\nDownload Attachments=ON. PDF/DOC/DOCX and JPG/PNG flyer text is read locally, with scanned PDF OCR. Limits: 10 documents, 10MB each, 20MB combined, 30 PDF pages. Unreadable documents require review. JPG/PNG images use OCR. Unreadable essential flyers require review; decorative logos can be ignored.\nForce Reconnect Every Minutes=1: keeps normal arrival handling plus a reconnect/catch-up backstop. Use n8n-live check-mail to verify actual mailbox arrivals read-only.",
+        "height": 520,
         "width": 430
       },
       "id": "instructions",
@@ -174,7 +174,7 @@
     "saveDataSuccessExecution": "all",
     "saveDataErrorExecution": "all"
   },
-  "versionId": "c9233b12-6e3c-42fc-adbb-647e6c0c3c54",
+  "versionId": "30afdc89-fcc6-40a2-a754-9c564efc17dd",
   "pinData": {},
   "tags": []
 }
