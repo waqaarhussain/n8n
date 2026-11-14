@@ -1,17 +1,21 @@
-"""Install the requested shortcut without replacing another project's helper."""
+"""Install project shortcuts without replacing another project's commands."""
 from pathlib import Path
 
 
-def main():
-    shortcut = Path('/usr/local/bin/helper')
-    target = Path('/usr/local/bin/n8n-live')
+def install_shortcut(shortcut, target, fallback):
     if shortcut.is_symlink() and shortcut.resolve() == target:
         return
     if shortcut.exists() or shortcut.is_symlink():
-        print('Existing helper command kept. Open the n8n menu with: sudo n8n-live helper')
+        print(f'Existing {shortcut.name} command kept. Use: {fallback}')
         return
     shortcut.symlink_to(target)
-    print('Installed helper. Run: helper')
+    print(f'Installed {shortcut.name}. Run: {shortcut.name}')
+
+
+def main():
+    target = Path('/usr/local/bin/n8n-live')
+    install_shortcut(Path('/usr/local/bin/helper'), target, 'sudo n8n-live helper')
+    install_shortcut(Path('/usr/local/bin/school-import'), target, 'sudo n8n-live school-import')
 
 
 if __name__ == '__main__':

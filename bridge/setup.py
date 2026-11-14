@@ -218,7 +218,7 @@ def main():
     settings.setdefault('allowed_senders', [])
     settings.pop('inout', None)
     save(settings)
-    print('\nSaved shared credentials. Choose a calendar when running n8n-live import.')
+    print('\nSaved shared credentials. Choose a calendar when running school-import.')
     if not key:
         print('AI extraction is NOT configured. Run n8n-setup again after obtaining an API key.')
 

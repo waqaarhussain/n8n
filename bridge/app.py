@@ -280,7 +280,7 @@ def connect_calendar(settings):
         calendars = client.principal().calendars()
         matches = [c for c in calendars if str(c.url) == icloud.get('calendar_url')]
         if len(matches) != 1:
-            raise ValueError('Configured iCloud calendar not found. Run n8n-live import to select it again.')
+            raise ValueError('Configured iCloud calendar not found. Run school-import to select it again.')
         return client, matches[0]
     except Exception:
         client.close()

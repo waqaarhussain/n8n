@@ -32,7 +32,7 @@ The installer clones to `/opt/waqaar-n8n`, installs Ubuntu's Docker packages if 
 
 The primary mail login is fixed to `hackdroid@icloud.com` and the forwarding alias to `waqaarn8n@icloud.com`. Setup verifies read-only IMAP access and can reuse the Apple app-specific password. These addresses and the model are public project defaults; passwords and API keys stay only on your server.
 
-General setup does not ask for a calendar. Run `sudo n8n-live import` to discover calendars and choose one by number before importing the email workflow. No calendar is created automatically. The bridge currently has one shared calendar destination, so importing again changes that destination for all workflows using this bridge.
+General setup does not ask for a calendar. Run `sudo school-import` to discover calendars and choose one by number before importing the email workflow. No calendar is created automatically. The bridge currently has one shared calendar destination, so importing again changes that destination for all workflows using this bridge.
 
 API key entry shows a live masked first/last-character preview in an interactive terminal and confirms it after Enter. Short keys are masked more heavily; Apple passwords remain hidden. Without a terminal, the prompt falls back to hidden entry followed by masked confirmation.
 
@@ -67,7 +67,7 @@ Setup uses the saved primary iCloud login and forwarding alias above. Supply an 
 After creating your n8n owner account in the browser:
 
 ```bash
-sudo n8n-live import
+sudo school-import
 ```
 
 This imports your configured IMAP credential into n8n's encrypted credential store and substitutes the saved alias into the workflow. Temporary credential import files are removed afterwards. The workflow is **inactive** until you review and publish it. The fixed email-address defaults are public; credentials and API keys are never committed.
@@ -184,7 +184,7 @@ For an existing installation, update the server and reimport the workflow to obt
 
 ```bash
 sudo n8n-live update
-sudo n8n-live import
+sudo school-import
 ```
 
 Calendar descriptions contain only the practical event summary. Source, Evidence, assumptions and missing-detail commentary are not appended. Evidence and structured assumptions stay internal for validation; the default duration remains 60 minutes. Reforwarding an existing message can refresh that event's notes at the same stable CalDAV URL, without creating a second event. Outputs distinguish `events_created` and `events_updated`.
@@ -232,4 +232,4 @@ For an existing published workflow, avoid importing over your edits: open Watch 
 
 ## Moving to a fresh VPS
 
-The bootstrap command installs a fresh instance. It does not transfer old n8n users, workflow edits, duplicate history, stats or encrypted credentials. Restore a private backup if those must carry over. For a fresh install, configure credentials, create the n8n owner account, run `sudo n8n-live import`, choose the calendar, then publish. Disable the old VPS workflow before publishing the new one so both listeners do not process the same emails. Keep the old VPS available until the new one passes a real email test.
+The bootstrap command installs a fresh instance. It does not transfer old n8n users, workflow edits, duplicate history, stats or encrypted credentials. Restore a private backup if those must carry over. For a fresh install, configure credentials, create the n8n owner account, run `sudo school-import`, choose the calendar, then publish. Disable the old VPS workflow before publishing the new one so both listeners do not process the same emails. Keep the old VPS available until the new one passes a real email test.
