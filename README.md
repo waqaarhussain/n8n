@@ -268,3 +268,15 @@ sudo journalctl -u n8n-telegram.service -n 30 --no-pager
 New imports use **Resolved** format. The native n8n IMAP implementation fetches the complete MIME message in this mode and parses it locally; Simple downloads HTML, plain text and attachments separately. This removes those separate download steps but does not guarantee faster delivery or instantaneous pickup. The trigger completes its email/attachment download before n8n records an execution start.
 
 For an existing published workflow, change only **Watch iCloud school alias → Format → Resolved**, keep the attachment prefix `attachment_`, then save and publish. Leave **Force Reconnect Every Minutes = 1**, recipient rules and other nodes unchanged. Normal `update-live` updates the template/backend without overwriting the published workflow's node settings. No reimport is needed for this one-field editor change. Compare a fresh forwarded email's mailbox arrival time with its exact execution start to assess the effect. Switching the format back to Simple is supported if needed.
+
+## Fast email pickup
+
+Fresh installs and `sudo update-live` load a small IMAP enhancement through a read-only mount and Node preload. The published workflow, credentials, nodes, calendar settings and duplicate tracking are preserved. **No workflow reimport or republish is needed.** The official n8n image remains pinned; its installed files are not modified.
+
+The native push listener stays active. A lightweight **NOOP plus UID-only search every 10 seconds** uses the same authenticated connection to catch new messages even when an arrival notification is delayed. Idle checks do not download old bodies or attachments. New UIDs request the native n8n catch-up path, which applies the existing alias filter, attachment handling and UID tracking. A slow fetch is coalesced instead of accumulating extra polling jobs. Native n8n retains responsibility for reconnecting; credential tests do not gain polling timers. Shutdown/unpublish cancels the additional check.
+
+This targets the wait before workflow execution. It does not promise a ten-second end-to-end calendar update: server command delays, connectivity, attachment downloading, OpenAI and CalDAV processing still take time. Existing one-minute forced reconnect settings can remain as a separate recovery backstop.
+
+The enhancement is verified against n8n 2.47.5's actual IMAP library in CI. If an engine upgrade changes the required internals, it logs a short warning and preserves native behaviour instead of taking n8n offline. Check `sudo n8n-live logs` for `Fast mail enabled` after updating. The preload never logs credentials, subjects, recipients or email bodies.
+
+For an explicit opt-out, add `N8N_FAST_MAIL_SECONDS=0` to `.env`, then run `sudo docker compose up -d n8n` from the project directory. The default is 10; supported non-zero intervals are 5–60 seconds. Removing the bind mount/NODE_OPTIONS preload also restores the native listener without changing workflows.

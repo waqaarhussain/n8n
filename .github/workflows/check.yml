@@ -12,6 +12,9 @@ jobs:
           python-version: '3.12'
       - run: pip install -r bridge/requirements.txt pytest
       - run: python -m pytest -q
+      - run: node --test tests/test_fast_mail.cjs
+      - name: Verify fast pickup against the actual n8n IMAP transport
+        run: docker run --rm --entrypoint node -e N8N_FAST_MAIL_TEST=1 -v "$PWD/engine/fast-mail.cjs:/opt/n8n-fast-mail.cjs:ro" -v "$PWD/tests:/tests:ro" docker.n8n.io/n8nio/n8n:2.47.5 /tests/fast_mail_smoke.cjs
       - run: bash -n bootstrap.sh install.sh scripts/n8n-live scripts/telegram-monitor.sh
       - run: POSTGRES_PASSWORD=test N8N_ENCRYPTION_KEY=test N8N_IMAGE=docker.n8n.io/n8nio/n8n:stable docker compose config --quiet
       - run: docker build -t school-bridge-test bridge
