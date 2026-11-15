@@ -21,13 +21,14 @@ from bs4 import BeautifulSoup
 import httpx
 from icalendar import Calendar, Event
 from pydantic import BaseModel, ConfigDict, Field
+from event_rules import audience_result, plan, policy, schema_for
 
 CONFIG = Path(os.getenv('CONFIG_PATH', '/config/settings.json'))
 STATE = Path(os.getenv('STATE_PATH', '/data/state.sqlite3'))
 LOCK = threading.Lock()
 LONDON = ZoneInfo('Europe/London')
 log = logging.getLogger('school-bridge')
-EXTRACTION_VERSION = 5
+EXTRACTION_VERSION = 6
 
 
 class ExtractedEvent(BaseModel):
@@ -40,6 +41,10 @@ class ExtractedEvent(BaseModel):
     summary: str
     evidence: str
     assumptions: list[str]
+    identity_title: str = Field(default='', max_length=250)
+    identity_evidence: str = Field(default='', max_length=2000)
+    audiences: list[str] = Field(default_factory=lambda: ['unspecified'], min_length=1, max_length=10)
+    audience_evidence: str = Field(default='', max_length=2000)
 
 
 class Extraction(BaseModel):
@@ -208,6 +213,27 @@ Document and image OCR text, when available, follows an Attachment heading in th
 text alongside the subject and email prose. If an attachment is referenced but its text is missing and
 necessary event details cannot be found, set needs_review=true. Summaries contain only practical event
 information, never extraction commentary, assumptions or claims about attachments being provided.
+Classify EACH EVENT's intended audience separately using only its own applicable subject/body/attachment
+section. audiences must contain one or more of: nursery, reception, pre_prep, year_1, year_2, year_3,
+year_4, year_5, year_6, whole_school, unspecified. Nursery, Reception and Pre-Prep matching is case-insensitive;
+recognise Pre Prep/preprep/hyphen variants and obvious spelling mistakes. Never apply a Year 3 paragraph
+elsewhere in a newsletter to an unrelated Nursery activity. Whole-school/family/public events are whole_school;
+when no year group or restriction is specified, use unspecified (these events should still be added).
+Do not invent a cohort. audience_evidence is a contiguous exact source quote showing the restriction,
+or empty when none is stated. allowed_year_groups in the request gives this family's selected groups.
+Return events for those groups, whole-school/family events, and events with no specified year group.
+Explicit Pre-Prep notices are relevant whenever Nursery or Reception is allowed.
+Omit events explicitly limited to other year groups. Do not let ambiguous dates or missing details in an
+excluded-year section force needs_review for the relevant events elsewhere in the email. Classify and
+filter each event independently; never reject a complete newsletter because it also contains older-year items.
+Set identity_title to the actual underlying occasion's concise name, and identity_evidence to a contiguous
+exact source quote naming it. This supports matching repeat notices with different email subjects or headings.
+For this family calendar, a fair attraction (for example Santa's Magical Grotto explicitly AT the Winter Fair)
+with exactly the parent fair's full date/start/end window and no separate visit slot belongs to ONE parent
+Winter Fair entry. Use the parent occasion as title/identity_title and put grotto/ticket details in its summary.
+A separately timed grotto appointment or a standalone activity is distinct. Never collapse different activities
+merely because their date/time is the same. Mufti Day on another date is its own event. Fair and Fayre are
+spelling variants. Do not conflate different cohort sessions, different locations or conflicting times.
 Some images may be logos with no readable text. Ignore decorative images when the event is otherwise clear;
 if necessary event details depend on an unreadable flyer/image, require manual review. OCR may contain errors;
 conflicting or uncertain dates must not be guessed. Missing location can be an empty string. All schema fields are required.'''
@@ -218,10 +244,10 @@ conflicting or uncertain dates must not be guessed. Missing location can be an e
             'model': settings.get('ai', {}).get('model', 'gpt-6.1-sol'),
             'messages': [
                 {'role': 'system', 'content': system},
-                {'role': 'user', 'content': json.dumps({'reference_date': reference, 'subject': subject, 'body': body})},
+                {'role': 'user', 'content': json.dumps({'reference_date': reference, 'subject': subject, 'body': body, 'allowed_year_groups': policy(settings)['groups']})},
             ],
             'response_format': {'type': 'json_schema', 'json_schema': {
-                'name': 'school_events', 'strict': True, 'schema': Extraction.model_json_schema(),
+                'name': 'school_events', 'strict': True, 'schema': schema_for(Extraction),
             }},
         })
         if response.status_code >= 400:
@@ -242,7 +268,7 @@ def timed(value):
     return dt
 
 
-def prepare_event(event, default_minutes=60):
+def prepare_event(event, default_minutes=60, uid_override=None):
     if not event.evidence.strip():
         raise ValueError('Event has no supporting evidence; manual review required.')
     if event.all_day:
@@ -257,7 +283,7 @@ def prepare_event(event, default_minutes=60):
     if event_day < datetime.now(LONDON).date():
         raise ValueError('Event date is in the past; manual review required.')
     uid_basis = re.sub(r'\W+', ' ', event.title).strip().casefold() + '|' + start.isoformat()
-    uid = hashlib.sha256(uid_basis.encode()).hexdigest() + '@school.n8n.local'
+    uid = uid_override or hashlib.sha256(uid_basis.encode()).hexdigest() + '@school.n8n.local'
     notes = event.summary.strip()
     cal = Calendar()
     cal.add('prodid', '-//Waqaar School Email//EN')
@@ -328,7 +354,7 @@ def process(data, settings=None):
         sender = sender.get('emailAddress', {}).get('address', '')
     if allowed and not any(v in str(sender).casefold() for v in allowed):
         return {'status': 'ignored', 'reason': 'Sender not on configured allowlist'}
-    mail_id = fingerprint(title, body)
+    mail_id = fingerprint(title, body + '\nAudience policy: ' + json.dumps(policy(settings), sort_keys=True))
     with LOCK, database() as db:
         row = db.execute('SELECT extraction, extraction_version FROM mail WHERE fingerprint=?', (mail_id,)).fetchone()
         duplicate = bool(row)
@@ -339,6 +365,10 @@ def process(data, settings=None):
             db.execute('INSERT INTO mail (fingerprint, extraction, extraction_version) VALUES (?, ?, ?) ON CONFLICT(fingerprint) DO UPDATE SET extraction=excluded.extraction, extraction_version=excluded.extraction_version', (mail_id, extracted.model_dump_json(), EXTRACTION_VERSION))
             db.commit()
         prepared = []
+        aliases = []
+        calendar_key = ''
+        duplicates_matched = 0
+        filtered_events = []
         review_details = []
         review = extracted.needs_review
         reason = extracted.reason
@@ -346,12 +376,31 @@ def process(data, settings=None):
             try:
                 # Validate the entire batch before making any calendar writes.
                 source_text = evidence_text(title + ' ' + body)
+                selected_events = []
                 for event in extracted.events:
+                    if event.audience_evidence and evidence_text(event.audience_evidence) not in source_text:
+                        raise ValueError('Event audience evidence did not match the source; manual review required.')
+                    action, explanation = audience_result(event, settings)
+                    if action == 'ignore':
+                        filtered_events.append({'title': event.title, 'reason': explanation})
+                        continue
+                    if action == 'review':
+                        raise ValueError(explanation)
                     evidence = evidence_text(event.evidence)
                     if not evidence or evidence not in source_text:
                         review_details.append({'title': event.title, 'evidence': event.evidence, 'start': event.start})
                         raise ValueError('The event supporting quote did not match the email or attachment text. See review_details; manual review required.')
-                prepared = [prepare_event(e, settings.get('default_duration_minutes', 60)) for e in extracted.events]
+                    if event.identity_evidence and evidence_text(event.identity_evidence) not in source_text:
+                        raise ValueError('Event identity evidence did not match the source; manual review required.')
+                    if event.identity_title and not event.identity_evidence:
+                        raise ValueError('Event identity has no supporting source quote; manual review required.')
+                    prepare_event(event, settings.get('default_duration_minutes', 60))
+                    selected_events.append(event)
+                calendar_key, planned, aliases, duplicates_matched = plan(
+                    db, selected_events, settings,
+                    lambda event: prepare_event(event, settings.get('default_duration_minutes', 60))[0])
+                prepared = [(uid, prepare_event(event, settings.get('default_duration_minutes', 60), uid_override=uid)[1], event)
+                            for uid, event in planned]
             except ValueError as exc:
                 review, reason = True, str(exc)
         created = 0
@@ -359,10 +408,12 @@ def process(data, settings=None):
         if prepared:
             client, calendar = connect_calendar(settings)
             try:
-                for uid, ics in prepared:
+                for uid, ics, event in prepared:
                     content_hash = hashlib.sha256(re.sub(r'DTSTAMP:[^\r\n]+', '', ics).encode()).hexdigest()
-                    old_event = db.execute('SELECT content_hash FROM events WHERE uid=?', (uid,)).fetchone()
+                    old_event = db.execute('SELECT content_hash FROM event_index WHERE calendar_key=? AND uid=?', (calendar_key, uid)).fetchone()
                     if old_event and old_event['content_hash'] == content_hash:
+                        db.execute('UPDATE event_index SET event_json=? WHERE calendar_key=? AND uid=?', (event.model_dump_json(), calendar_key, uid))
+                        db.commit()
                         continue
                     # Fixed UID and URL make a retry after an interrupted save idempotent.
                     # PUT replaces the same resource instead of creating another event.
@@ -371,6 +422,7 @@ def process(data, settings=None):
                     remote = caldav.Event(client=client, parent=calendar, url=event_url, data=ics)
                     remote.save()
                     db.execute('INSERT INTO events (uid, created_at, content_hash) VALUES (?, ?, ?) ON CONFLICT(uid) DO UPDATE SET content_hash=excluded.content_hash', (uid, datetime.now(timezone.utc).isoformat(), content_hash))
+                    db.execute('INSERT INTO event_index(calendar_key,uid,event_json,day,content_hash) VALUES (?,?,?,?,?) ON CONFLICT(calendar_key,uid) DO UPDATE SET event_json=excluded.event_json,day=excluded.day,content_hash=excluded.content_hash', (calendar_key, uid, event.model_dump_json(), event.start[:10], content_hash))
                     db.commit()
                     if old_event:
                         updated += 1
@@ -378,6 +430,9 @@ def process(data, settings=None):
                         created += 1
             finally:
                 client.close()
+        if not review:
+            db.executemany('INSERT INTO event_aliases(calendar_key,signature,uid) VALUES (?,?,?) ON CONFLICT(calendar_key,signature) DO UPDATE SET uid=excluded.uid', aliases)
+            db.commit()
         # Calendar writes are committed before optional notification delivery.
         from textmebot import notify
         try:
@@ -387,7 +442,8 @@ def process(data, settings=None):
         # Legacy published workflows must not fail calendar runs on message errors.
         return {'status': 'review' if review else ('duplicate' if duplicate else 'processed'),
                 'reason': reason, 'events_created': created, 'events_updated': updated,
-                'uncertain_deliveries': 0, 'notification': notification, 'review_details': review_details, 'attachment_summary': attachment_summary}
+                'uncertain_deliveries': 0, 'notification': notification, 'review_details': review_details, 'attachment_summary': attachment_summary,
+                'duplicates_matched': duplicates_matched, 'filtered_events': filtered_events, 'deduplication': 'enabled'}
 
 
 

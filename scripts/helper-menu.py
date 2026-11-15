@@ -13,6 +13,8 @@ OPTIONS = [
     ('setup', 'Change shared Apple credentials or OpenAI key'),
     ('update', 'Back up and update this n8n project'),
     ('backup', 'Create a private backup'),
+    ('school-groups', 'Choose the children’s school year groups'),
+    ('school-reset', 'Back up and clear school test/duplicate history (keeps iCloud events)'),
     ('school-import', 'Choose calendar and import email workflow (replaces its node settings)'),
     ('web', 'Change the web UI IP address or hostname'),
     ('upgrade-engine', 'Back up and explicitly upgrade the n8n engine'),
