@@ -76,7 +76,7 @@ Open **School email via iCloud alias → iCloud Calendar** and confirm:
 
 - Credential: **School iCloud IMAP**.
 - Mailbox: **INBOX**.
-- Format: **Simple**. For this IMAP node, Simple includes the full body; it is different from Outlook's preview-only Simplified output.
+- Format: **Resolved**, with attachment prefix `attachment_`. This fetches the full message source and parses its body/attachments locally instead of issuing separate body/attachment downloads. The bridge accepts both the older Simple fields and Resolved fields.
 - Action: **Nothing**, so the trigger does not mark messages read.
 - Custom Email Rules: `['ALL', ['TO', 'your-automation-alias@icloud.com']]` using valid JSON with double quotes. The import command fills this in automatically.
 - Fetch Only New Emails is enabled.
@@ -262,3 +262,9 @@ Monitor status/logs:
 sudo systemctl status n8n-telegram.service
 sudo journalctl -u n8n-telegram.service -n 30 --no-pager
 ```
+
+## Existing school workflow: full-message IMAP download
+
+New imports use **Resolved** format. The native n8n IMAP implementation fetches the complete MIME message in this mode and parses it locally; Simple downloads HTML, plain text and attachments separately. This removes those separate download steps but does not guarantee faster delivery or instantaneous pickup. The trigger completes its email/attachment download before n8n records an execution start.
+
+For an existing published workflow, change only **Watch iCloud school alias → Format → Resolved**, keep the attachment prefix `attachment_`, then save and publish. Leave **Force Reconnect Every Minutes = 1**, recipient rules and other nodes unchanged. Normal `update-live` updates the template/backend without overwriting the published workflow's node settings. No reimport is needed for this one-field editor change. Compare a fresh forwarded email's mailbox arrival time with its exact execution start to assess the effect. Switching the format back to Simple is supported if needed.

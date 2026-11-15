@@ -168,7 +168,8 @@ def test_icloud_alias_workflow_is_scoped_and_inactive():
     workflow=json.loads((Path(__file__).resolve().parents[1]/'workflows/school-icloud.json').read_text())
     node=workflow['nodes'][0]
     assert node['type']=='n8n-nodes-base.emailReadImap'
-    assert node['parameters']['format']=='simple'
+    assert node['parameters']['format']=='resolved'
+    assert node['parameters']['dataPropertyAttachmentsPrefixName']=='attachment_'
     assert node['parameters']['postProcessAction']=='nothing'
     assert node['parameters']['options']['forceReconnect']==1
     assert json.loads(node['parameters']['options']['customEmailConfig']) == ['ALL',['TO','YOUR_N8N_ALIAS@icloud.com']]
@@ -298,3 +299,28 @@ def test_evidence_typography_normalises_without_changing_dates():
     assert app.evidence_text('16th November') != app.evidence_text('16 November')
     assert app.evidence_text('27.11.2026') != app.evidence_text('28.11.2026')
     assert app.evidence_text('2.15pm') != app.evidence_text('2:15pm')
+
+
+def test_resolved_imap_keeps_full_body_recipient_and_reference():
+    # mailparser (n8n Resolved) emits structured recipients plus text/html fields.
+    data = {'subject': 'Fwd: School workshop',
+            'text': 'Please bring PE kit.\n\nThe workshop is on 16 November 2026.',
+            'html': '<p>Less useful HTML copy</p>',
+            'date': '2026-11-15T02:12:00.000Z',
+            'to': {'value': [{'address': 'automation@icloud.com', 'name': 'Automation'}],
+                   'text': 'Automation <automation@icloud.com>'},
+            'headers': {'to': 'To: Automation <automation@icloud.com>'}}
+    subject, body, reference = app.normalise_email(data)
+    assert subject == 'School workshop'
+    assert body == data['text']
+    assert reference == data['date']
+    assert app.alias_matches(data, 'automation@icloud.com')
+    assert not app.alias_matches(data, 'other@icloud.com')
+
+
+def test_resolved_html_only_email_keeps_event_details():
+    data = {'subject': 'School date', 'text': '',
+            'html': '<p>Winter fair</p><p>27 November 2026, 4pm to 5:30pm.</p>'}
+    _, body, _ = app.normalise_email(data)
+    assert 'Winter fair' in body
+    assert '27 November 2026, 4pm to 5:30pm.' in body

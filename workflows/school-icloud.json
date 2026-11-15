@@ -8,12 +8,13 @@
         "mailbox": "INBOX",
         "postProcessAction": "nothing",
         "downloadAttachments": true,
-        "format": "simple",
+        "format": "resolved",
         "options": {
           "customEmailConfig": "[\"ALL\", [\"TO\", \"YOUR_N8N_ALIAS@icloud.com\"]]",
           "forceReconnect": 1,
           "trackLastMessageId": true
-        }
+        },
+        "dataPropertyAttachmentsPrefixName": "attachment_"
       },
       "id": "icloud-school",
       "name": "Watch iCloud school alias",
@@ -174,7 +175,7 @@
     "saveDataSuccessExecution": "all",
     "saveDataErrorExecution": "all"
   },
-  "versionId": "30afdc89-fcc6-40a2-a754-9c564efc17dd",
+  "versionId": "a770ddde-2d96-471c-98ed-9d62e3284696",
   "pinData": {},
   "tags": []
 }
