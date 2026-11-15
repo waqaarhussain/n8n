@@ -216,6 +216,7 @@ def main():
     settings['ai'] = {'api_key': key, 'model': model}
     settings['default_duration_minutes'] = 60
     settings.setdefault('allowed_senders', [])
+    settings.setdefault('school_audience', {'groups': ['nursery', 'reception', 'pre_prep'], 'include_whole_school': True})
     settings.pop('inout', None)
     save(settings)
     print('\nSaved shared credentials. Choose a calendar when running school-import.')

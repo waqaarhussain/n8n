@@ -119,7 +119,7 @@ Local files:
 ## Reliability and limits
 
 - The AI model runs remotely; this server coordinates API calls. The email body is sent to the configured OpenAI API. It is not uploaded to this repository.
-- Matching duplicate email content uses the cleaned subject/body. Changed content can legitimately be processed again. Event deduplication uses a normalised title plus start date/time. This is not a universal semantic duplicate detector and does not deduplicate existing IFTTT events.
+- Matching duplicate email content uses the cleaned subject/body. Changed content can legitimately be processed again. Event matching combines occurrence date/time, event identity, audience, location and practical details. Exact matches reuse a stable event UID; differing titles with plausible matching occurrences receive a conservative OpenAI comparison. It does not retroactively deduplicate unrelated pre-existing/IFTTT entries.
 - Deterministic CalDAV UIDs and resource URLs make retries reuse the same event resource after an interrupted write.
 - Mail trigger cursors can advance before downstream failures. A failed execution needs a deliberate retry from n8n; retries are protected by the content/event state. If email arrival triggers are mission-critical, add a scheduled reconciliation workflow before relying on this unattended.
 - iCloud connection checks verify credentials and calendar discovery, not write permission. A shared read-only calendar will fail on the first write. Select an owned/writable calendar.
@@ -280,3 +280,31 @@ This targets the wait before workflow execution. It does not promise a ten-secon
 The enhancement is verified against n8n 2.47.5's actual IMAP library in CI. If an engine upgrade changes the required internals, it logs a short warning and preserves native behaviour instead of taking n8n offline. Check `sudo n8n-live logs` for `Fast mail enabled` after updating. The preload never logs credentials, subjects, recipients or email bodies.
 
 For an explicit opt-out, add `N8N_FAST_MAIL_SECONDS=0` to `.env`, then run `sudo docker compose up -d n8n` from the project directory. The default is 10; supported non-zero intervals are 5–60 seconds. Removing the bind mount/NODE_OPTIONS preload also restores the native listener without changing workflows.
+
+## School audience and stronger duplicate matching
+
+Duplicate protection is always enabled. New extraction metadata identifies the underlying occasion and the intended audience from the subject, substantive email body and readable attachments together. Matching uses occurrence date/time plus identity, audience, location and event details, never just a clock time or a similar title. The index is scoped to the selected calendar. It also handles duplicate notices within one email/batch.
+
+Repeated notices reuse the original calendar UID/URL. Useful new paragraphs are merged into that entry rather than discarded. Fair/Fayre spelling variants match. A Santa's Grotto explicitly held as part of the Winter Fair, for the same complete event window and with no separate visit appointment, is folded into the single Winter Fair entry. Ticket/booking/adult-accompaniment details stay in its notes. Mufti Day remains a separate event. A separately timed grotto booking, different activity at the same time, conflicting location/time, or separate cohort session must not be silently collapsed. Possible matches with unclear/conflicting evidence require review. Non-exact matching can make an additional OpenAI request; successful title variants are remembered locally.
+
+The default selected cohorts are **Nursery, Reception and Pre-Prep**, with case-insensitive matching and common Pre Prep/preprep/hyphen variants. Events explicitly limited to other groups, including Years 1–6, are excluded. Each event in a newsletter is evaluated independently. **Whole-school/family events and events with no specified year group are included.** A generic mention of older years elsewhere in a newsletter does not exclude relevant younger-child activities.
+
+To change the cohorts later:
+
+```bash
+sudo school-groups
+```
+
+Choose allowed groups by number, separated by commas. For example, choose Year 1 and Reception when those become the children's groups. Explicit Pre-Prep notices remain relevant while Nursery or Reception is selected. The helper preserves Apple/OpenAI settings and needs no workflow reimport/republish. Policy changes invalidate the relevant extraction cache. Existing calendar events are not deleted when the selected groups change.
+
+### Fresh manual duplicate test
+
+Keep the Outlook forwarding rule off during this test. Update, then clear the old processing history:
+
+```bash
+sudo update-live && sudo school-reset
+```
+
+The reset briefly stops/restarts n8n and the bridge, creates a private SQLite backup, then clears processed-email extraction, event-match/alias records and cached image transcription. Duplicate protection stays **ON** immediately afterwards. It does not delete iCloud inbox messages, existing calendar entries, execution logs, stats, credentials or Telegram selections. **Remove the old test entries from the School calendar yourself before forwarding the examples again**, otherwise old calendar duplicates remain outside the fresh local index. Do not use the earlier manual `DELETE FROM mail/events` snippet now: use this helper so the additional matching tables are cleared consistently.
+
+Forward the Mufti Day/Winter Fair notice and the grotto notice. The expected outcome is two calendar entries: Mufti Day, and Winter Fair including the grotto details. Re-forwarding either notice should reuse those entries. Once this passes with the actual emails/attachments, enable the Outlook rule. This is a backend update; no school workflow reimport or republish is needed. Both helpers are also listed in `helper` and installed by fresh curl installs.
