@@ -25,16 +25,23 @@ def check(settings, connection_factory=imaplib.IMAP4_SSL):
         if status != 'OK':
             raise ValueError('IMAP alias search failed.')
         identifiers = rows[0].split() if rows and rows[0] else []
+        # SEARCH result order is not a reliable newest-first/oldest-first contract.
+        # UIDs must be compared numerically, not as strings or by response position.
+        if any(not identity.isdigit() or int(identity) < 1 for identity in identifiers):
+            raise ValueError('IMAP search returned an invalid mailbox UID.')
+        identifiers = sorted(set(identifiers), key=int, reverse=True)
         print('Connected to INBOX read-only. Alias: ' + mail['alias'])
-        print(f'Matching messages: {len(identifiers)}. Showing the newest five by mailbox UID.')
-        for identity in identifiers[-5:]:
+        print(f'Matching messages: {len(identifiers)}. Showing the newest five by mailbox UID, newest first.')
+        for identity in identifiers[:5]:
             status, fetched = client.uid('fetch', identity, '(INTERNALDATE BODY.PEEK[HEADER.FIELDS (SUBJECT TO DATE)])')
             if status != 'OK':
                 print('UID ' + identity.decode() + ': header fetch failed')
                 continue
-            for part in fetched:
+            found_headers = False
+            for part in fetched or []:
                 if not isinstance(part, tuple):
                     continue
+                found_headers = True
                 metadata, raw_headers = part
                 internal = re.search(rb'INTERNALDATE "([^"]+)"', metadata)
                 message = message_from_bytes(raw_headers)
@@ -42,6 +49,8 @@ def check(settings, connection_factory=imaplib.IMAP4_SSL):
                 print('Arrived at mailbox: ' + (internal[1].decode() if internal else 'unknown'))
                 print('Subject: ' + decoded(message.get('Subject')))
                 print('To: ' + decoded(message.get('To')))
+            if not found_headers:
+                print('UID ' + identity.decode() + ': headers unavailable; message may have moved or been deleted')
         print('\nNo messages changed. Calendar processing and duplicate history are untouched.')
     finally:
         try:
