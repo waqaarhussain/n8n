@@ -134,3 +134,38 @@ def test_remote_update_script_exit_and_order(tmp_path, fail_at):
     assert ' update' in lines[0]
     assert len(lines) == (1 if fail_at == 'update' else 2)
     assert ('N8N_REBOOT_REQUIRED=1' in proc.stdout) == (not fail_at)
+
+
+def test_malformed_saved_summary_does_not_block_other_alerts(monkeypatch):
+    monkeypatch.setattr(tg, 'sql', lambda _: [
+        {'id': '1', 'data': '[]'},
+        {'id': '2', 'workflow_id': tg.MAINTENANCE_WORKFLOW, 'data': flatten(summary())},
+    ])
+    rows = tg.reboot_executions([{'workflow_id': tg.MAINTENANCE_WORKFLOW, 'enabled_at': '2026-11-16T00:00Z'}])
+    assert len(rows) == 1 and rows[0]['id'] == 'reboot:2'
+
+
+def test_importer_keeps_password_out_of_workflow_and_uses_private_host(monkeypatch):
+    spec = importlib.util.spec_from_file_location('import_vps', ROOT/'scripts/import-vps.py')
+    importer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(importer)
+    monkeypatch.chdir(ROOT)
+    answers = iter(['192.0.2.42', "Media 'VPS'"])
+    monkeypatch.setattr('builtins.input', lambda _: next(answers))
+    monkeypatch.setattr(importer.getpass, 'getpass', lambda _: 'private-test-password')
+    calls = []
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return MagicMock(stdout='0')
+    monkeypatch.setattr(importer, 'run', run)
+    importer.main()
+    submitted = [json.loads(kw['input']) for args, kw in calls if 'input' in kw]
+    assert submitted[0][0]['data']['host'] == '192.0.2.42'
+    assert submitted[0][0]['data']['username'] == 'root'
+    assert submitted[0][0]['data']['password'] == 'private-test-password'
+    workflow = submitted[1]
+    assert workflow['active'] is False
+    assert 'private-test-password' not in json.dumps(workflow)
+    assert "Media 'VPS'" in workflow['nodes'][2]['parameters']['jsCode']
+    assert all('private-test-password' not in str(args) for args, kw in calls)
+    assert calls[-1][0][-1] == '/tmp/waqaar-vps-workflow.json'

@@ -199,7 +199,12 @@ def reboot_executions(subscriptions):
         ORDER BY e.id) r;''')
     result = []
     for row in rows:
-        names = reboot_names(row['data'])
+        try:
+            names = reboot_names(row['data'])
+        except (ValueError, KeyError, TypeError, IndexError):
+            # A deleted/edited summary must not suppress other workflow alerts.
+            print('Maintenance summary unavailable; inspect its execution.', flush=True)
+            continue
         if names:
             result.append({'id': 'reboot:' + row['id'], 'workflow_id': row['workflow_id'], 'reboot_names': names})
     return result
