@@ -242,18 +242,75 @@ def test_duplicate_comparator_sends_context_and_a_strict_schema(monkeypatch):
     facts = json.loads(sent['messages'][1]['content'])
     assert facts['candidates'][0]['uid'] == 'known'
     assert facts['incoming']['start'] == incoming.start
+    assert 'location' not in facts['incoming']
+    assert 'location' not in facts['candidates'][0]['event']
     assert result.match_uid == 'known'
 
 
 def test_multiple_strong_candidates_are_reviewed_instead_of_picking_first(backend, monkeypatch):
-    process_events(monkeypatch, [event(location='Hall A')], 'Hall A event')
+    process_events(monkeypatch, [event(audiences=['nursery'])], 'Nursery session')
     monkeypatch.setattr(rules, 'compare', lambda *args: rules.Decision(relationship='distinct', match_uid=None,
-        confidence='high', canonical_title='', reason='Separate room sessions.'))
-    process_events(monkeypatch, [event(location='Hall B')], 'Hall B event')
+        confidence='high', canonical_title='', reason='Separate cohort sessions.'))
+    process_events(monkeypatch, [event(audiences=['reception'])], 'Reception session')
     comparison = MagicMock(return_value=rules.Decision(relationship='uncertain', match_uid=None,
-        confidence='low', canonical_title='', reason='Missing room, two possible sessions.'))
+        confidence='low', canonical_title='', reason='Two possible cohort sessions.'))
     monkeypatch.setattr(rules, 'compare', comparison)
-    result = process_events(monkeypatch, [event(location='')], 'Unknown room reminder')
+    result = process_events(monkeypatch, [event(audiences=['nursery', 'reception'])], 'Combined cohort reminder')
     assert result['status'] == 'review'
     assert comparison.call_count == 1
     assert len(backend) == 2
+
+
+def test_nativity_reminder_refines_default_duration_despite_legacy_school_location(backend, monkeypatch):
+    original = event('Nursery and Reception Nativity', end=None, location='In school',
+                     audiences=['nursery', 'reception'], summary='Save the date for the Nativity.')
+    process_events(monkeypatch, [original], 'Save the date')
+    with app.database() as db:
+        row = db.execute('SELECT calendar_key,uid,event_json FROM event_index').fetchone()
+        legacy = json.loads(row['event_json'])
+        legacy['location'] = 'In school'
+        db.execute('UPDATE event_index SET event_json=? WHERE uid=?', (json.dumps(legacy), row['uid']))
+        db.commit()
+        uid = row['uid']
+    monkeypatch.setattr(rules, 'compare', lambda *args: rules.Decision(relationship='same_event', match_uid=uid,
+        confidence='high', canonical_title='Nursery and Reception Nativity', reason='Same performance reminder.'))
+    reminder = event('Nursery and Reception Nativity Play', location='School hall, The Shrubbery School',
+                     end=(START + timedelta(minutes=30)).isoformat(), audiences=['nursery', 'reception'],
+                     summary='The performance lasts approximately 30 minutes.')
+    result = process_events(monkeypatch, [reminder], 'Nativity reminder')
+    assert result['status'] == 'processed'
+    assert result['events_created'] == 0 and result['events_updated'] == 1
+    assert result['duplicates_matched'] == 1
+    assert backend[-1]['url'] == backend[0]['url']
+    ical = Calendar.from_ical(backend[-1]['data']).walk('VEVENT')[0]
+    assert ical.decoded('dtend') - ical.decoded('dtstart') == timedelta(minutes=30)
+    assert 'LOCATION' not in ical
+    with app.database() as db:
+        saved = json.loads(db.execute('SELECT event_json FROM event_index WHERE uid=?', (uid,)).fetchone()[0])
+        assert 'location' not in saved
+
+
+def test_location_is_not_requested_from_ai_or_included_in_calendar():
+    schema = rules.schema_for(app.Extraction)['$defs']['ExtractedEvent']
+    assert 'location' not in schema['properties']
+    assert 'location' not in schema['required']
+    old = event(location='School hall')
+    assert 'location' not in old.model_dump()
+    _, ics = app.prepare_event(old)
+    assert 'LOCATION' not in Calendar.from_ical(ics).walk('VEVENT')[0]
+
+
+def test_location_does_not_change_duplicate_signature():
+    assert rules.signature(event(location='In school')) == rules.signature(event(location='School hall'))
+
+
+def test_explicit_conflicting_end_times_still_require_review(backend, monkeypatch):
+    process_events(monkeypatch, [event(location='In school')], 'First time')
+    with app.database() as db: uid = db.execute('SELECT uid FROM event_index').fetchone()[0]
+    monkeypatch.setattr(rules, 'compare', lambda *args: rules.Decision(relationship='same_event', match_uid=uid,
+        confidence='high', canonical_title='Winter Fair', reason='Possible same event.'))
+    changed = event(end=(START + timedelta(minutes=30)).isoformat(), location='School hall')
+    result = process_events(monkeypatch, [changed], 'Conflicting explicit end')
+    assert result['status'] == 'review'
+    assert 'conflicting' in result['reason'] and 'times' in result['reason']
+    assert len(backend) == 1
