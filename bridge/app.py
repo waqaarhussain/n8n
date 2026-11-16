@@ -28,7 +28,7 @@ STATE = Path(os.getenv('STATE_PATH', '/data/state.sqlite3'))
 LOCK = threading.Lock()
 LONDON = ZoneInfo('Europe/London')
 log = logging.getLogger('school-bridge')
-EXTRACTION_VERSION = 6
+EXTRACTION_VERSION = 7
 
 
 class ExtractedEvent(BaseModel):
@@ -37,7 +37,8 @@ class ExtractedEvent(BaseModel):
     start: str
     end: str | None
     all_day: bool
-    location: str
+    # Read legacy cached records, but omit location from new model output/storage.
+    location: str = Field(default='', exclude=True)
     summary: str
     evidence: str
     assumptions: list[str]
@@ -192,7 +193,7 @@ to each event, not the whole unrelated newsletter. Add useful attachment details
 If the email body is just a generic attachment introduction, write the description from the attachment instead.
 Do not repeat the event title/date/time merely to fill space. If no substantive details exist, summary can be empty.
 Never add Source/Evidence labels, filenames or processing commentary to the description. Use the newest clear event details in quoted threads.
-Each event needs an exact concise title, location if stated, and a short verbatim evidence excerpt supporting
+Each event needs an exact concise title and a short verbatim evidence excerpt supporting
 its date and time. Evidence MUST be one contiguous exact quote copied from a source, not a paraphrase.
 Do not combine separate subject/body/attachment fragments into a new quote. Preserve source date spelling,
 ordinal suffixes, punctuation and OCR spacing; never replace them with your interpreted ISO date.
@@ -233,10 +234,13 @@ with exactly the parent fair's full date/start/end window and no separate visit 
 Winter Fair entry. Use the parent occasion as title/identity_title and put grotto/ticket details in its summary.
 A separately timed grotto appointment or a standalone activity is distinct. Never collapse different activities
 merely because their date/time is the same. Mufti Day on another date is its own event. Fair and Fayre are
-spelling variants. Do not conflate different cohort sessions, different locations or conflicting times.
+spelling variants. Do not conflate different cohort sessions or conflicting times.
+Location is not a calendar field or duplicate criterion for this family. School/room/venue wording must
+not cause a review error or a separate entry for an otherwise matching occasion. Retain substantive
+email prose normally, including any practical venue instructions that are part of that prose.
 Some images may be logos with no readable text. Ignore decorative images when the event is otherwise clear;
 if necessary event details depend on an unreadable flyer/image, require manual review. OCR may contain errors;
-conflicting or uncertain dates must not be guessed. Missing location can be an empty string. All schema fields are required.'''
+conflicting or uncertain dates must not be guessed. All schema fields are required.'''
     with httpx.Client(timeout=90) as client:
         response = client.post('https://api.openai.com/v1/chat/completions', headers={
             'Authorization': 'Bearer ' + key,
@@ -290,7 +294,7 @@ def prepare_event(event, default_minutes=60, uid_override=None):
     cal.add('version', '2.0')
     item = Event()
     for key, value in [('uid', uid), ('dtstamp', datetime.now(timezone.utc)), ('summary', event.title),
-                       ('dtstart', start), ('dtend', end), ('description', notes), ('location', event.location)]:
+                       ('dtstart', start), ('dtend', end), ('description', notes)]:
         item.add(key, value)
     cal.add_component(item)
     return uid, cal.to_ical().decode()

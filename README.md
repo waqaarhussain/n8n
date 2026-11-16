@@ -8,7 +8,7 @@ A self-hosted n8n deployment with PostgreSQL, an `update-live` command and a pri
 - The standard n8n web UI at `https://YOUR_PUBLIC_IPV4` or your DNS hostname, through Caddy. Public-IP mode explicitly requests short-lived publicly trusted Let's Encrypt certificates and renews them automatically. SSH tunnel mode remains available.
 - A server-side iCloud wizard: app-specific password, calendar discovery, explicit selection and read-only calendar/mail connection checks.
 - An importable workflow that listens for incoming iCloud Mail forwarded to a dedicated alias. No Microsoft/Entra app registration is required.
-- AI extraction of multiple event titles, dates, start/end times, locations and useful notes.
+- AI extraction of multiple event titles, dates, start/end times and useful notes.
 - RSVP deadlines go into notes; missing end times use a 60-minute default. Ambiguous dates, cancellations and changes require review.
 - SQLite tracking of processed email content and event UIDs to reduce duplicate events.
 - Backups before updates; secrets, database and edited n8n workflows are kept outside Git.
@@ -119,7 +119,7 @@ Local files:
 ## Reliability and limits
 
 - The AI model runs remotely; this server coordinates API calls. The email body is sent to the configured OpenAI API. It is not uploaded to this repository.
-- Matching duplicate email content uses the cleaned subject/body. Changed content can legitimately be processed again. Event matching combines occurrence date/time, event identity, audience, location and practical details. Exact matches reuse a stable event UID; differing titles with plausible matching occurrences receive a conservative OpenAI comparison. It does not retroactively deduplicate unrelated pre-existing/IFTTT entries.
+- Matching duplicate email content uses the cleaned subject/body. Changed content can legitimately be processed again. Event matching combines occurrence date/time, event identity, audience and practical details. Exact matches reuse a stable event UID; differing titles with plausible matching occurrences receive a conservative OpenAI comparison. It does not retroactively deduplicate unrelated pre-existing/IFTTT entries.
 - Deterministic CalDAV UIDs and resource URLs make retries reuse the same event resource after an interrupted write.
 - Mail trigger cursors can advance before downstream failures. A failed execution needs a deliberate retry from n8n; retries are protected by the content/event state. If email arrival triggers are mission-critical, add a scheduled reconciliation workflow before relying on this unattended.
 - iCloud connection checks verify credentials and calendar discovery, not write permission. A shared read-only calendar will fail on the first write. Select an owned/writable calendar.
@@ -283,9 +283,9 @@ For an explicit opt-out, add `N8N_FAST_MAIL_SECONDS=0` to `.env`, then run `sudo
 
 ## School audience and stronger duplicate matching
 
-Duplicate protection is always enabled. New extraction metadata identifies the underlying occasion and the intended audience from the subject, substantive email body and readable attachments together. Matching uses occurrence date/time plus identity, audience, location and event details, never just a clock time or a similar title. The index is scoped to the selected calendar. It also handles duplicate notices within one email/batch.
+Duplicate protection is always enabled. New extraction metadata identifies the underlying occasion and the intended audience from the subject, substantive email body and readable attachments together. Matching uses occurrence date/time plus identity, audience and event details, never just a clock time or a similar title. The index is scoped to the selected calendar. It also handles duplicate notices within one email/batch.
 
-Repeated notices reuse the original calendar UID/URL. Useful new paragraphs are merged into that entry rather than discarded. Fair/Fayre spelling variants match. A Santa's Grotto explicitly held as part of the Winter Fair, for the same complete event window and with no separate visit appointment, is folded into the single Winter Fair entry. Ticket/booking/adult-accompaniment details stay in its notes. Mufti Day remains a separate event. A separately timed grotto booking, different activity at the same time, conflicting location/time, or separate cohort session must not be silently collapsed. Possible matches with unclear/conflicting evidence require review. Non-exact matching can make an additional OpenAI request; successful title variants are remembered locally.
+Repeated notices reuse the original calendar UID/URL. Useful new paragraphs are merged into that entry rather than discarded. Fair/Fayre spelling variants match. A Santa's Grotto explicitly held as part of the Winter Fair, for the same complete event window and with no separate visit appointment, is folded into the single Winter Fair entry. Ticket/booking/adult-accompaniment details stay in its notes. Mufti Day remains a separate event. A separately timed grotto booking, different activity at the same time, conflicting date/time, or separate cohort session must not be silently collapsed. Possible matches with unclear/conflicting evidence require review. Non-exact matching can make an additional OpenAI request; successful title variants are remembered locally.
 
 The default selected cohorts are **Nursery, Reception and Pre-Prep**, with case-insensitive matching and common Pre Prep/preprep/hyphen variants. Events explicitly limited to other groups, including Years 1–6, are excluded. Each event in a newsletter is evaluated independently. **Whole-school/family events and events with no specified year group are included.** A generic mention of older years elsewhere in a newsletter does not exclude relevant younger-child activities.
 
@@ -308,3 +308,11 @@ sudo update-live && sudo school-reset
 The reset briefly stops/restarts n8n and the bridge, creates a private SQLite backup, then clears processed-email extraction, event-match/alias records and cached image transcription. Duplicate protection stays **ON** immediately afterwards. It does not delete iCloud inbox messages, existing calendar entries, execution logs, stats, credentials or Telegram selections. **Remove the old test entries from the School calendar yourself before forwarding the examples again**, otherwise old calendar duplicates remain outside the fresh local index. Do not use the earlier manual `DELETE FROM mail/events` snippet now: use this helper so the additional matching tables are cleared consistently.
 
 Forward the Mufti Day/Winter Fair notice and the grotto notice. The expected outcome is two calendar entries: Mufti Day, and Winter Fair including the grotto details. Re-forwarding either notice should reuse those entries. Once this passes with the actual emails/attachments, enable the Outlook rule. This is a backend update; no school workflow reimport or republish is needed. Both helpers are also listed in `helper` and installed by fresh curl installs.
+
+## School location field removed
+
+Location is no longer requested as a structured OpenAI field, written to the calendar LOCATION property, included in event signatures, or used by duplicate matching. Old cached/indexed records containing a location still load safely. Practical venue wording can remain in the substantive email description.
+
+A reminder changing "In school" to "School hall, The Shrubbery School" can now update the same occurrence. If the earlier email supplied no end time and the calendar used the default hour, a newly stated 30-minute duration replaces that placeholder. Conflicting explicit dates/times still require review; year-group filtering and unrelated-event protection remain active.
+
+Apply with `sudo update-live`. Keep the current history, publish state and workflow. Forward the held reminder again as a new email to reprocess it; do not retry the saved final Review-email node or run school-reset. The matched entry reuses its UID, receives the stated end time and drops the structured location field on its next successful update. Other existing calendar entries are refreshed only when subsequently processed.
