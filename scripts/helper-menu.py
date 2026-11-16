@@ -21,6 +21,7 @@ OPTIONS = [
     ('remove-whatsapp', 'Remove all saved WhatsApp provider settings'),
     ('setup-textmebot', 'Optional TextMeBot setup (automatic messages stay off)'),
     ('check-textmebot', 'Send one TextMeBot test message'),
+    ('vps-import', 'Import Monday VPS updates with private root SSH credentials'),
     ('enable-textmebot', 'Enable configured TextMeBot email notifications'),
 ]
 

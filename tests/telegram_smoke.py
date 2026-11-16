@@ -70,5 +70,18 @@ with tempfile.TemporaryDirectory() as directory:
     except subprocess.CalledProcessError:
         pass
     assert len(tg.workflows()) == 2
+    # Actual n8n-produced flatted data, delivered only for opted-in successful maintenance.
+    fixture('''CREATE TABLE execution_data ("executionId" INTEGER PRIMARY KEY, data TEXT);
+      INSERT INTO workflow_entity(id,name) VALUES ('VpsWeeklyUpdatesV1','VPS weekly updates');''')
+    tg.set_subscription(db, tg.MAINTENANCE_WORKFLOW, True)
+    serialized = Path('/tmp/vps-execution.json').read_text()
+    assert tg.reboot_names(serialized) == ['Stored VPS name']
+    identity = fixture("INSERT INTO execution_entity(\"workflowId\",status) VALUES ('VpsWeeklyUpdatesV1','success') RETURNING id;").splitlines()[0]
+    fixture('INSERT INTO execution_data VALUES (' + identity + ',' + tg.literal(serialized) + ');')
+    assert tg.tick(db, settings) == 1
+    assert sent[-1] == {'chat_id': '123', 'text': 'Stored VPS name requires reboot'}
+    assert tg.tick(db, settings) == 0
+    tg.set_subscription(db, tg.MAINTENANCE_WORKFLOW, False)
+    assert tg.tick(db, settings) == 0
     db.close()
 print('Telegram integration passed: default OFF, per-workflow opt-in, saved failures/crashes, no historical replay, late failures, persistent deduplication and read-only database access.')

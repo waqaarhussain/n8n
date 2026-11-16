@@ -138,6 +138,78 @@ def failed_executions(subscriptions):
         ORDER BY e.id) r;''')
 
 
+MAINTENANCE_WORKFLOW = 'VpsWeeklyUpdatesV1'
+
+
+def reboot_names(serialized):
+    """Read only the fixed summary node from n8n's flatted execution graph.
+
+    References are followed one level per path step, not recursively: cyclic
+    graphs and numeric strings in the string table cannot confuse decoding.
+    """
+    if len(serialized) > 4_000_000:
+        raise ValueError('Maintenance execution exceeds size limit')
+    table = json.loads(serialized)
+    if not isinstance(table, list) or not table:
+        raise ValueError('Invalid execution graph')
+    def ref(value):
+        if isinstance(value, str):
+            if not value.isdecimal() or int(value) >= len(table):
+                raise ValueError('Invalid execution reference')
+            return table[int(value)]
+        return value
+    def field(value, key):
+        return ref(value[key])
+    root = table[0]
+    runs = field(field(field(root, 'resultData'), 'runData'), 'VPS reboot summary')
+    names = []
+    for raw_run in runs:
+        run = ref(raw_run)
+        if 'error' in run:
+            continue
+        outputs = field(field(run, 'data'), 'main')
+        for raw_output in outputs:
+            for raw_item in ref(raw_output):
+                data = field(ref(raw_item), 'json')
+                if field(data, 'maintenance_version') != 1 or field(data, 'update_status') != 'success':
+                    raise ValueError('Invalid maintenance summary')
+                name = field(data, 'vps_name')
+                reboot = field(data, 'reboot_required')
+                if not isinstance(name, str) or not name.strip() or len(name) > 100 or any(not c.isprintable() for c in name):
+                    raise ValueError('Invalid VPS name')
+                if type(reboot) is not bool:
+                    raise ValueError('Invalid reboot status')
+                if reboot and name not in names:
+                    names.append(name)
+    return names
+
+
+def reboot_executions(subscriptions):
+    scope = next((s for s in subscriptions if s['workflow_id'] == MAINTENANCE_WORKFLOW), None)
+    if scope is None:
+        return []
+    # No school bodies or SSH credentials are queried. Only this workflow's
+    # successful saved outputs are eligible, after the opt-in timestamp.
+    rows = sql('''SELECT coalesce(json_agg(r), '[]') FROM (
+        SELECT e.id::text AS id, e."workflowId" AS workflow_id, d.data
+        FROM execution_entity e JOIN execution_data d ON d."executionId"=e.id
+        WHERE e."workflowId"=''' + literal(MAINTENANCE_WORKFLOW) + '''
+          AND e.status='success' AND e."deletedAt" IS NULL
+          AND e."createdAt">=''' + literal(scope['enabled_at']) + '''::timestamptz
+        ORDER BY e.id) r;''')
+    result = []
+    for row in rows:
+        try:
+            names = reboot_names(row['data'])
+        except (ValueError, KeyError, TypeError, IndexError):
+            # A deleted/edited summary must not suppress other workflow alerts.
+            print('Maintenance summary unavailable; inspect its execution.', flush=True)
+            continue
+        if names:
+            result.append({'id': 'reboot:' + row['id'], 'workflow_id': row['workflow_id'], 'reboot_names': names})
+    return result
+
+
 def public_url():
     values = dict(line.split('=', 1) for line in Path('.env').read_text().splitlines()
                   if line and not line.startswith('#') and '=' in line)
@@ -175,7 +247,7 @@ def tick(db, settings, now=None):
         return 0
     sent_count = 0
     base_url = public_url()
-    for row in failed_executions(subscriptions):
+    for row in failed_executions(subscriptions) + reboot_executions(subscriptions):
         # Re-check opt-in before sending in case the helper disabled it mid-poll.
         subscription = db.execute('SELECT enabled, enabled_at FROM subscriptions WHERE workflow_id=?', (row['workflow_id'],)).fetchone()
         original = next(s for s in subscriptions if s['workflow_id'] == row['workflow_id'])
@@ -190,7 +262,9 @@ def tick(db, settings, now=None):
         db.execute('UPDATE deliveries SET attempts=?,next_attempt=? WHERE execution_id=?', (attempts, now + 60, row['id']))
         db.commit()
         try:
-            api(settings['token'], 'sendMessage', alert_payload(row, settings['chat_id'], base_url))
+            payload = ({'chat_id': settings['chat_id'], 'text': '\n'.join(name + ' requires reboot' for name in row['reboot_names'])}
+                       if 'reboot_names' in row else alert_payload(row, settings['chat_id'], base_url))
+            api(settings['token'], 'sendMessage', payload)
         except TelegramError as exc:
             delay = max(exc.retry_after, min(3600, 20 * 2 ** min(attempts, 7)))
             db.execute('UPDATE deliveries SET next_attempt=? WHERE execution_id=?', (now + delay, row['id']))
@@ -260,7 +334,7 @@ def helper():
         with closing(database()) as db:
             subscriptions = {r['workflow_id']: r for r in db.execute('SELECT * FROM subscriptions')}
         rows = workflows()
-        print('\nTelegram failure alerts\n')
+        print('\nTelegram alerts (failures; VPS maintenance also reports required reboots)\n')
         for number, row in enumerate(rows, 1):
             enabled = row['id'] in subscriptions and subscriptions[row['id']]['enabled']
             print(f"{number}) {row['name']} | {'ON' if enabled else 'OFF'}")

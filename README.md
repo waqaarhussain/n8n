@@ -326,3 +326,31 @@ Reply/forward headers and HTML quotation boundaries are supplied as supplemental
 Non-actionable decisions must contain no extracted events or actionable evidence. Contradictory classification still requires review. Genuine event conflicts, current missing/unreadable essential attachments, failed evidence validation and provider/network errors retain their existing safeguards. There is no blanket conversion of failures to success and no keyword-only banter filter.
 
 Apply with `sudo update-live`. No workflow reimport, republish or reset is needed. A newly forwarded copy of a previously failed conversational reply is reclassified under the updated extraction version; existing calendar entries are left alone. Old execution records and previously accumulated statistics are historical and are not rewritten. Use the existing per-workflow stats-reset helper separately if you want a fresh Overview baseline.
+
+### Weekly VPS package updates
+
+Run `sudo update-live`, then `sudo n8n-live vps-import` on the n8n host.
+The importer privately asks for the VPS IP, a display name and hidden root SSH
+password (port 22); credentials are imported into n8n's encrypted credential store,
+not written into the workflow export. Re-import refuses to replace an existing
+maintenance workflow. Edit the SSH credential or the **VPS display name** node
+in n8n for later changes.
+
+The new **VPS weekly updates** workflow is initially inactive. Verify the SSH
+credential and publish it to schedule Mondays at 00:00 **Europe/London**, including
+UK daylight-saving changes. The manual trigger runs the actual upgrade too.
+It uses `apt-get update` and `apt-get upgrade -y` noninteractively, keeps existing
+configuration files when a decision is required, waits up to ten minutes for apt
+locks and prevents overlapping copies of its own update script. Repository errors,
+nonzero exit codes and missing reboot-check output fail the workflow. Services
+can restart during upgrades. It never runs reboot, full-upgrade or autoremove.
+It checks `/var/run/reboot-required` after a successful upgrade.
+
+Run `sudo telegram` and enable **VPS weekly updates**. The existing bot and
+per-workflow opt-in then cover ordinary failure alerts and successful maintenance
+runs requiring reboot. A reboot alert contains only one line per stored display
+name: `VPS name requires reboot`. A successful run without a required reboot is
+silent. Remote Ubuntu hostnames are never used. Reboot checks are read only from
+this workflow's fixed **VPS reboot summary** output, after opt-in, with persistent
+delivery tracking and retry. Alerts remain off until enabled; saved successful
+execution data is required. School failure-alert behavior is unchanged.
