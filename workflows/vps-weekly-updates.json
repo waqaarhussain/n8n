@@ -1,0 +1,142 @@
+{
+  "id": "VpsWeeklyUpdatesV1",
+  "name": "VPS weekly updates",
+  "active": false,
+  "nodes": [
+    {
+      "id": "weekly",
+      "name": "Monday midnight UK",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 * * 1"
+            }
+          ]
+        }
+      },
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "id": "manual",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "parameters": {},
+      "position": [
+        0,
+        180
+      ]
+    },
+    {
+      "id": "name",
+      "name": "VPS display name",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "return [{json: {vps_name: 'My VPS'}}];"
+      },
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "id": "ssh",
+      "name": "Update My VPS",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "parameters": {
+        "authentication": "password",
+        "resource": "command",
+        "operation": "execute",
+        "command": "bash -s <<'N8N_MAINTENANCE'\nset -euo pipefail\n[ \"$(id -u)\" = 0 ] || { echo 'Root access required' >&2; exit 1; }\nexec 9>/var/lock/n8n-weekly-apt.lock\nflock -n 9 || { echo 'Another weekly update is running' >&2; exit 1; }\nexport DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a\napt-get -o DPkg::Lock::Timeout=600 -o APT::Update::Error-Mode=any update\napt-get -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y\nif [ -f /var/run/reboot-required ]; then\n  printf '\\nN8N_REBOOT_REQUIRED=1\\n'\nelse\n  printf '\\nN8N_REBOOT_REQUIRED=0\\n'\nfi\nN8N_MAINTENANCE",
+        "cwd": "/"
+      },
+      "position": [
+        480,
+        0
+      ],
+      "credentials": {
+        "sshPassword": {
+          "id": "VpsWeeklySsh1",
+          "name": "Weekly VPS SSH"
+        }
+      }
+    },
+    {
+      "id": "summary",
+      "name": "VPS reboot summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nif (result.code !== 0) throw new Error('VPS package update failed. Inspect the SSH node output.');\nconst markers = String(result.stdout || '').match(/^N8N_REBOOT_REQUIRED=([01])$/gm) || [];\nif (markers.length !== 1) throw new Error('Missing or ambiguous reboot check result.');\nconst name = $('VPS display name').first().json.vps_name;\nif (typeof name !== 'string' || !name.trim() || name.length > 100 || /[\\r\\n\\x00-\\x1f]/.test(name)) throw new Error('Set a valid VPS display name.');\nreturn [{json: {maintenance_version: 1, vps_name: name, reboot_required: markers[0].endsWith('1'), update_status: 'success'}}];"
+      },
+      "position": [
+        720,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Monday midnight UK": {
+      "main": [
+        [
+          {
+            "node": "VPS display name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "VPS display name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "VPS display name": {
+      "main": [
+        [
+          {
+            "node": "Update My VPS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update My VPS": {
+      "main": [
+        [
+          {
+            "node": "VPS reboot summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/London",
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "executionTimeout": 7200
+  },
+  "pinData": {},
+  "tags": []
+}
