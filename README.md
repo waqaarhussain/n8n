@@ -354,3 +354,16 @@ silent. Remote Ubuntu hostnames are never used. Reboot checks are read only from
 this workflow's fixed **VPS reboot summary** output, after opt-in, with persistent
 delivery tracking and retry. Alerts remain off until enabled; saved successful
 execution data is required. School failure-alert behavior is unchanged.
+
+### Early club/school closure notices
+
+A clear dated notice that a club or school closes early is an actionable reminder,
+not automatically a conflicting reschedule. When the notice supplies only a closing
+or collection cutoff (not an opening time), extraction creates an all-day date
+marker whose title and notes include that cutoff. It does not invent opening hours,
+a timed session or a separate last-day-of-term event from contextual prose. Audience,
+source-evidence and duplicate checks still apply; actual cancellations, reschedules,
+ambiguous dates and conflicting times continue to need review. The extraction-cache
+version is refreshed, so re-forwarding an older reviewed notice after updating can
+re-evaluate it without clearing event or duplicate history. Backend-only change:
+no workflow re-import or republish is needed.
