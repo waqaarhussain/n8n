@@ -25,7 +25,7 @@ def reset_history():
             destination.close()
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         db.execute('BEGIN IMMEDIATE')
-        for table in ('mail', 'events', 'event_index', 'event_aliases', 'image_transcripts'):
+        for table in ('mail', 'events', 'event_index', 'event_aliases', 'note_merges', 'image_transcripts'):
             if table in tables:
                 db.execute('DELETE FROM ' + table)
         db.commit()

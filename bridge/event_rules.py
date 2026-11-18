@@ -185,16 +185,8 @@ def same_window(first, second):
     return a == b
 
 
-def merge(first, second, title):
-    paragraphs = []
-    seen = set()
-    for text in (first.summary, second.summary):
-        for paragraph in re.split(r'\n\s*\n', text.strip()):
-            key = normal(paragraph)
-            if key and key not in seen:
-                seen.add(key)
-                paragraphs.append(paragraph.strip())
-    values = {'title': title or first.title, 'summary': '\n\n'.join(paragraphs),
+def merge(first, second, title, summary):
+    values = {'title': title or first.title, 'summary': summary,
               'location': '',
               'end': first.end or second.end,
               'audiences': sorted(set(first.audiences + second.audiences)),
@@ -202,7 +194,7 @@ def merge(first, second, title):
     return first.model_copy(update=values)
 
 
-def plan(db, events, settings, uid_for, comparator=None):
+def plan(db, events, settings, uid_for, comparator=None, note_context=None):
     """Plan the entire batch before writing CalDAV, including same-email duplicates."""
     init_index(db)
     calendar_key = hashlib.sha256(settings.get('icloud', {}).get('calendar_url', 'selected-calendar').encode()).hexdigest()
@@ -257,7 +249,9 @@ def plan(db, events, settings, uid_for, comparator=None):
                     raise ValueError('Duplicate comparison proposed an unsupported title; manual review required.')
                 match, canonical = decision.match_uid, decision.canonical_title
         if match:
-            event = merge(known[match], event, canonical or known[match].title)
+            from event_notes import reconcile
+            summary = reconcile(db, settings, known[match], event, note_context)
+            event = merge(known[match], event, canonical or known[match].title, summary)
             uid = match
             duplicates += 1
         else:

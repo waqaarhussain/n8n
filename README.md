@@ -367,3 +367,25 @@ ambiguous dates and conflicting times continue to need review. The extraction-ca
 version is refreshed, so re-forwarding an older reviewed notice after updating can
 re-evaluate it without clearing event or duplicate history. Backend-only change:
 no workflow re-import or republish is needed.
+
+### Comparing notes on repeat notices
+
+For an already matched calendar occasion, differing saved and incoming notes now
+receive a separate OpenAI meaning comparison. Equivalent reminders are kept once,
+including repeated wording already accumulated by older versions. New practical
+facts are added; a shorter reminder does not remove old details just because it
+omits them. An old instruction is replaced/removed only for a clear authoritative
+correction, not merely because an email arrived later. Ambiguous contradictions
+still need review and keep the existing calendar entry untouched.
+
+Output paragraphs must be exact excerpts of the saved or incoming notes, checked
+locally before any calendar writes. Matching dates, times, cohorts and occasions
+remains separate. Exact identical/empty note pairs avoid an extra API call; other
+successful comparisons are cached privately in the existing SQLite state. Entire
+batches are planned before writes, so an unsafe merge cannot partially update a
+newsletter. Normal updates preserve history and do not re-import workflows. To
+clean old repeated notes, re-forward the latest relevant notice after updating;
+this reconciles the same stored event UID instead of creating a new event. Clearing
+history is unnecessary. As with event extraction, semantic decisions use AI and
+should be checked on the first live notices; source-excerpt validation prevents
+unsupported wording but cannot independently prove the model kept every fact.
