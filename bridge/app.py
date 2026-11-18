@@ -502,7 +502,8 @@ def process(data, settings=None):
                     selected_events.append(event)
                 calendar_key, planned, aliases, duplicates_matched = plan(
                     db, selected_events, settings,
-                    lambda event: prepare_event(event, settings.get('default_duration_minutes', 60))[0])
+                    lambda event: prepare_event(event, settings.get('default_duration_minutes', 60))[0],
+                    note_context={'reference_date': reference, 'thread_text': thread_text})
                 prepared = [(uid, prepare_event(event, settings.get('default_duration_minutes', 60), uid_override=uid)[1], event)
                             for uid, event in planned]
             except ValueError as exc:

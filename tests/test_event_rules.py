@@ -33,6 +33,11 @@ def backend(tmp_path, monkeypatch):
         saves.append(kwargs)
         return remote
     monkeypatch.setattr(app.caldav, 'Event', remote_event)
+    import event_notes
+    monkeypatch.setattr(event_notes, 'decide', lambda settings, first, second, context:
+        event_notes.NotesDecision(needs_review=False, reason='Independent details in occurrence fixture.',
+            paragraphs=[event_notes.Paragraph(source='saved', text=first.summary),
+                        event_notes.Paragraph(source='incoming', text=second.summary)]))
     return saves
 
 
