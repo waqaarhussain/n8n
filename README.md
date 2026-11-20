@@ -9,7 +9,7 @@ A self-hosted n8n deployment with PostgreSQL, an `update-live` command and a pri
 - A server-side iCloud wizard: app-specific password, calendar discovery, explicit selection and read-only calendar/mail connection checks.
 - An importable workflow that listens for incoming iCloud Mail forwarded to a dedicated alias. No Microsoft/Entra app registration is required.
 - AI extraction of multiple event titles, dates, start/end times and useful notes.
-- RSVP deadlines go into notes; missing end times use a 60-minute default. Ambiguous dates, cancellations and changes require review.
+- Dated parent actions (forms, RSVP, bookings and payments) get their own deadline entries; missing activity end times use a 60-minute default. Ambiguous dates, cancellations and changes require review.
 - SQLite tracking of processed email content and event UIDs to reduce duplicate events.
 - Backups before updates; secrets, database and edited n8n workflows are kept outside Git.
 
@@ -389,3 +389,25 @@ this reconciles the same stored event UID instead of creating a new event. Clear
 history is unnecessary. As with event extraction, semantic decisions use AI and
 should be checked on the first live notices; source-excerpt validation prevents
 unsupported wording but cannot independently prove the model kept every fact.
+
+
+### Parent action and deadline reminders
+
+Dated requests to return lunch choices, consent/permission forms, RSVP, book tickets,
+pay balances or submit information are calendar actions even without an associated
+performance or trip on that date. The extractor creates an all-day entry on the
+actual due date with an action-based title and submission details in its notes.
+A clock cutoff stays in the title/notes rather than becoming an invented session.
+Term/menu labels do not override the due date: a November 2026 email requesting a
+form by Thursday 3 December for Spring 2027 meals is due on 3 December 2026.
+
+Each entry records whether it is an activity or a deadline. Activity/deadline pairs
+cannot merge just because they share a date or parent title. Different tasks due
+on the same day remain distinct; repeat reminders of the same task and due date
+reuse the existing entry and notes reconciliation. An email saying 'reminder' about
+Mufti Day or a club closure still matches that activity, without creating a separate
+task. Menu weekday grids, form template blanks, acknowledgements and undated general
+advice do not create entries. Year-group, evidence, uncertainty and duplicate guards
+continue to apply. Legacy saved entries default to activity. The extraction cache
+version changes so previously ignored deadline mail can be re-forwarded after an
+update without resetting history, re-importing or republishing the workflow.
