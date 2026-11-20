@@ -73,7 +73,7 @@ Prefer complete, readable sentences/paragraphs and retain substantive source wor
 Do not discard useful old details just to shorten the notes. Do not add process commentary, source labels,
 evidence blocks or reasons to the notes. When notes contain practical content the result cannot be empty.
 needs_review=false only when there is a consistent supported result; reason briefly explains your decision.'''
-    payload = {'event': {'title': first.title, 'start': first.start, 'end': first.end, 'all_day': first.all_day},
+    payload = {'event': {'title': first.title, 'start': first.start, 'end': first.end, 'all_day': first.all_day, 'entry_kind': first.entry_kind},
                'saved_notes': first.summary, 'incoming_notes': second.summary, 'thread_context': context or {}}
     try:
         with httpx.Client(timeout=90) as client:
@@ -100,7 +100,7 @@ def reconcile(db, settings, first, second, context=None):
     if max(len(saved), len(incoming)) > 60000:
         raise ValueError('Event notes are too long to compare safely; saved notes were kept.')
     db.execute('CREATE TABLE IF NOT EXISTS note_merges (fingerprint TEXT PRIMARY KEY, summary TEXT NOT NULL)')
-    key = hashlib.sha256(json.dumps([VERSION, first.title, first.start, first.end, first.all_day,
+    key = hashlib.sha256(json.dumps([VERSION, first.title, first.start, first.end, first.all_day, first.entry_kind,
         saved, incoming, context or {}], sort_keys=True).encode()).hexdigest()
     previous = db.execute('SELECT summary FROM note_merges WHERE fingerprint=?', (key,)).fetchone()
     if previous:
