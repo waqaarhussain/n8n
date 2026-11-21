@@ -41,6 +41,11 @@ def save(value):
     temporary.replace(CONFIG)
 
 
+def address(value):
+    parsed = ipaddress.ip_address(value)
+    return str(getattr(parsed, 'ipv4_mapped', None) or parsed)
+
+
 def self_addresses():
     """Refresh protection from editor URL and local interfaces, not Ubuntu hostname."""
     addresses = {'127.0.0.1', '::1'}
@@ -55,13 +60,17 @@ def self_addresses():
             addresses.update(x['local'] for x in interface.get('addr_info', []) if 'local' in x)
     except (OSError, ValueError, subprocess.SubprocessError):
         pass
-    return addresses
+    normalized = set()
+    for value in addresses:
+        try: normalized.add(address(value))
+        except ValueError: normalized.add(value)
+    return normalized
 
 
 def protected(server, settings=None):
     settings = load() if settings is None else settings
-    return (server.get('is_n8n_host', False) or server['host'] in self_addresses()
-            or server['host'] in settings.get('protected_hosts', []))
+    return (server.get('is_n8n_host', False) or address(server['host']) in self_addresses()
+            or address(server['host']) in {address(h) for h in settings.get('protected_hosts', [])})
 
 
 def eligible(settings=None):
@@ -96,6 +105,8 @@ def import_value(value, kind):
 def setup_key(server, data):
     if protected(server):
         raise ValueError('The n8n host cannot receive a Telegram reboot key')
+    if address(data['host']) != address(server['host']) or int(data.get('port', 22)) != int(server.get('port', 22)) or data.get('username') != 'root':
+        raise ValueError('Saved SSH credential target differs from the VPS inventory')
     KEYS.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(KEYS, 0o700)
     key = KEYS/server['id']
@@ -151,7 +162,7 @@ def migrate(settings):
     code = next(n for n in nodes if n.get('name') == 'VPS display name')['parameters']['jsCode']
     match = re.search(r'vps_name:\s*("(?:\\.|[^"\\])*"|\'[^\']*\')', code)
     name = ast.literal_eval(match.group(1)) if match else input('Existing VPS display name: ').strip()
-    server = {'id': secrets.token_hex(6), 'host': str(ipaddress.ip_address(data['host'])),
+    server = {'id': secrets.token_hex(6), 'host': address(data['host']),
               'port': int(data.get('port', 22)), 'name': name, 'credential_id': cred_id,
               'credential_name': ssh['credentials']['sshPassword'].get('name', 'Weekly VPS SSH'),
               'is_n8n_host': False, 'reboot_ready': False}
@@ -166,7 +177,7 @@ def add(settings):
         host = input('VPS IP to add [Enter finishes]: ').strip()
         if not host:
             return
-        host = str(ipaddress.ip_address(host))
+        host = address(host)
         if any(s['host'] == host for s in settings['servers']):
             print('Already saved; use its existing entry.')
             continue

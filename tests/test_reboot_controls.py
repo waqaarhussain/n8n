@@ -247,3 +247,12 @@ def test_menu_polling_is_responsive_without_speeding_failure_queries(state, tmp_
     assert controls.call_count==12
     assert alerts.call_count==2
     assert pauses==[1]*12
+
+
+def test_key_setup_rejects_changed_credential_target_before_any_ssh(state, monkeypatch):
+    runner=MagicMock();monkeypatch.setattr(vps,'run',runner)
+    with pytest.raises(ValueError,match='target differs'):
+        vps.setup_key(server(1),{'host':'192.0.2.3','port':22,'username':'root'})
+    runner.assert_not_called()
+    mapped=server(1);mapped['host']='::ffff:192.0.2.3'
+    assert vps.protected(mapped)
