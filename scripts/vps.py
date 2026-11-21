@@ -102,6 +102,10 @@ def import_value(value, kind):
         docker('exec', '-T', 'n8n', 'rm', '-f', path)
 
 
+class SetupError(ValueError):
+    """A fixed, non-secret diagnostic safe to show on the terminal."""
+
+
 def setup_key(server, data):
     if protected(server):
         raise ValueError('The n8n host cannot receive a Telegram reboot key')
@@ -115,8 +119,18 @@ def setup_key(server, data):
     os.chmod(key, 0o600)
     payload = {'credential': data, 'public_key': key.with_suffix('.pub').read_text().strip(),
                'forced_command': FORCED_COMMAND, 'expected_key': server.get('host_key', '')}
-    output = docker('exec', '-T', 'n8n', 'node', '-e', Path('scripts/vps-ssh-setup.cjs').read_text(),
-                    input=json.dumps(payload), timeout=45)
+    try:
+        output = docker('exec', '-T', 'n8n', 'node', '-e', Path('scripts/vps-ssh-setup.cjs').read_text(),
+                        input=json.dumps(payload), timeout=45)
+    except subprocess.CalledProcessError as error:
+        # Never echo arbitrary remote/CLI output, which may contain credentials.
+        try:
+            code = json.loads(error.stdout or '{}').get('setup_error')
+        except (ValueError, AttributeError):
+            code = None
+        if code in {'SSH_AUTHENTICATION', 'SSH_CONNECT', 'SSH_HOST_KEY', 'SSH_ROOT_CHECK', 'SSH_KEY_INSTALL'}:
+            raise SetupError(code) from None
+        raise
     result = json.loads(output.stdout)
     host_key = result['host_key']
     if not re.fullmatch(r'[A-Za-z0-9@._+-]+ [A-Za-z0-9+/=]+', host_key):
@@ -254,27 +268,48 @@ reboot_required:ok && markers[0].endsWith('1')}}];""".replace('NAME', json.dumps
 
 def main():
     os.umask(0o077)
+    stage = 'loading saved inventory'
     try:
         settings = load()
+        stage = 'reading existing workflow'
         migrate(settings)
+        print('Saved servers: ' + ', '.join(s['name'] for s in settings['servers']))
+        print('Only enter an IP to ADD a new server. Press Enter to prepare the saved servers.')
+        stage = 'adding a new server'
         add(settings)
         if not settings['servers']:
             raise ValueError('No VPS servers saved')
         for server in settings['servers']:
+            label = json.dumps(server['name'], ensure_ascii=True)
+            stage = 'checking protection for ' + label
             if protected(server, settings):
                 server['is_n8n_host'] = True
                 server['reboot_ready'] = False
             elif not server.get('reboot_ready') or not (KEYS/server['id']).is_file() or not (KEYS/(server['id']+'.known_hosts')).is_file():
-                setup_key(server, credential(server['credential_id']))
+                stage = 'exporting saved SSH credential for ' + label
+                print('Preparing reboot access for ' + label + '...', flush=True)
+                data = credential(server['credential_id'])
+                stage = 'installing restricted reboot key for ' + label
+                setup_key(server, data)
+            stage = 'saving inventory for ' + label
             save(settings)
+        stage = 'importing weekly workflow'
+        import_value(build_workflow(settings['servers']), 'workflow')
+        stage = 'enabling reboot controls'
         settings['telegram_reboot_enabled'] = True
         save(settings)
-        import_value(build_workflow(settings['servers']), 'workflow')
         print('Imported INACTIVE: VPS weekly updates. Publish it again for Mondays 00:00 UK.')
         print('Saved display names are used in Telegram. Send reboot to select one or more eligible servers.')
         print('The n8n host updates last and cannot be rebooted through Telegram. No upgrades or reboots were run by setup.')
-    except (OSError, ValueError, subprocess.SubprocessError, KeyError, StopIteration):
-        raise SystemExit('VPS setup could not finish. Check services/SSH access and run vps-manage again; saved inventory is kept. No secret values printed.') from None
+    except (OSError, ValueError, subprocess.SubprocessError, KeyError, StopIteration) as error:
+        # Exception text and captured CLI output can include secrets.
+        detail = type(error).__name__
+        if isinstance(error, subprocess.CalledProcessError):
+            detail += ' exit=' + str(error.returncode)
+        if isinstance(error, SetupError):
+            detail = str(error)
+        raise SystemExit('VPS setup failed while ' + stage + ' (' + detail + '). '
+                         'Saved inventory is kept. Share this message; no secret values are included.') from None
 
 
 if __name__ == '__main__':

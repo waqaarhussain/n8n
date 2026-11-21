@@ -1,6 +1,8 @@
 'use strict';
 // Uses the real node-ssh package inside the official n8n image; no network calls.
 const assert = require('node:assert/strict');
+const {spawnSync} = require('node:child_process');
+const source = require('node:fs').readFileSync('/scripts/vps-ssh-setup.cjs', 'utf8');
 const {setup} = require('/scripts/vps-ssh-setup.cjs');
 const {createRequire} = require('node:module');
 const root=createRequire('/usr/local/lib/node_modules/n8n/package.json');
@@ -18,6 +20,18 @@ class SSH {
 const forced="flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-reboot-pending && /sbin/shutdown -r +1 && touch /run/n8n-reboot-pending'";
 (async () => {
   const payload={credential:{host:'192.0.2.1',username:'root',password:'never-in-command'},public_key:'ssh-ed25519 YWJj n8n-reboot-only',forced_command:forced};
+  // Exercise the actual node -e/stdin entry point, not just the imported function.
+  const invalid = spawnSync(process.execPath, ['-e', source], {input:'{invalid', encoding:'utf8'});
+  assert.equal(invalid.status, 1);
+  assert.deepEqual(JSON.parse(invalid.stdout), {setup_error:'SSH_INPUT'});
+  assert.equal(invalid.stderr, '');
+  const refused = spawnSync(process.execPath, ['-e', source], {
+    input:JSON.stringify({...payload, credential:{...payload.credential, host:'127.0.0.1', port:1}}),
+    encoding:'utf8', timeout:20000
+  });
+  assert.equal(refused.status, 1);
+  assert.deepEqual(JSON.parse(refused.stdout), {setup_error:'SSH_CONNECT'});
+  assert(!refused.stdout.includes('never-in-command'));
   const result=await setup(payload,SSH);
   assert(result.host_key.startsWith('ssh-ed25519 '));
   assert(commands[1].includes('restrict,command='));

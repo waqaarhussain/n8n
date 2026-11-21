@@ -295,3 +295,44 @@ def test_status_hides_secrets_and_reports_unfinished_reboot_keys(state, monkeypa
     assert 'Bot: @alertsbot' in output
     assert 'REBOOT BLOCKED' in output and 'NOT READY' in output
     assert 'private-token' not in output
+
+
+@pytest.mark.parametrize('failed_step', ['credential', 'key', 'import'])
+def test_manager_reports_failed_stage_without_secrets(state, monkeypatch, failed_step):
+    _, _, _, settings = state
+    settings['telegram_reboot_enabled'] = False
+    vps.save(settings)
+    monkeypatch.setattr(vps, 'migrate', lambda _: None)
+    monkeypatch.setattr(vps, 'add', lambda _: None)
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, ['secret-command'], output='private-password', stderr='private-token')
+    monkeypatch.setattr(vps, 'credential', fail if failed_step == 'credential' else lambda _: {})
+    monkeypatch.setattr(vps, 'setup_key', fail if failed_step == 'key' else lambda *args: None)
+    monkeypatch.setattr(vps, 'import_value', fail if failed_step == 'import' else lambda *args: None)
+    with pytest.raises(SystemExit) as result:
+        vps.main()
+    text = str(result.value)
+    expected = {'credential':'exporting saved SSH credential for "Server 1"',
+                'key':'installing restricted reboot key for "Server 1"', 'import':'importing weekly workflow'}
+    assert expected[failed_step] in text
+    assert 'exit=1' in text
+    assert not any(secret in text for secret in ('private-password', 'private-token', 'secret-command'))
+    assert vps.load()['telegram_reboot_enabled'] is False
+
+
+@pytest.mark.parametrize('code', ['SSH_AUTHENTICATION', 'SSH_HOST_KEY', 'private-password'])
+def test_key_setup_only_exposes_fixed_diagnostics(state, monkeypatch, code):
+    _, _, _, settings = state
+    vps.KEYS.mkdir()
+    key = vps.KEYS/server(1)['id']
+    key.write_text('private-test-key')
+    key.with_suffix('.pub').write_text('ssh-ed25519 YWJj test')
+    def fail(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, ['node'], output=json.dumps({'setup_error':code}))
+    monkeypatch.setattr(vps, 'docker', fail)
+    with pytest.raises(ValueError if code != 'private-password' else subprocess.CalledProcessError) as result:
+        vps.setup_key(server(1), {'host':'192.0.2.1','port':22,'username':'root'})
+    if code != 'private-password':
+        assert str(result.value) == code
+    else:
+        assert 'private-password' not in str(result.value)

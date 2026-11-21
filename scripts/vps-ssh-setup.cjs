@@ -4,7 +4,6 @@ const {createRequire} = require('node:module');
 const root = createRequire('/usr/local/lib/node_modules/n8n/package.json');
 const nodes = createRequire(root.resolve('n8n-nodes-base/package.json'));
 const {NodeSSH} = nodes('node-ssh');
-const crypto = require('node:crypto');
 const quote = s => "'" + s.replace(/'/g, "'\\''") + "'";
 async function setup(payload, SSH = NodeSSH) {
   const c = payload.credential;
@@ -13,21 +12,31 @@ async function setup(payload, SSH = NodeSSH) {
   if (payload.forced_command !== expected) throw new Error('Invalid restricted command');
   let hostKey = '';
   const ssh = new SSH();
+  let stage = 'SSH_CONNECT';
   try {
     await ssh.connect({host:c.host, port:c.port || 22, username:'root', password:c.password,
       readyTimeout:15000,
       hostVerifier(key) {
         const type = key.subarray(4, 4 + key.readUInt32BE(0)).toString();
         hostKey = type + ' ' + key.toString('base64');
-        return !payload.expected_key || payload.expected_key === hostKey;
+        const matches = !payload.expected_key || payload.expected_key === hostKey;
+        if (!matches) stage = 'SSH_HOST_KEY';
+        return matches;
       }});
+    stage = 'SSH_ROOT_CHECK';
     const check = await ssh.execCommand('id -u');
     if (check.code !== 0 || check.stdout.trim() !== '0' || !hostKey) throw new Error('Root/key check failed');
     const line = 'restrict,command=' + JSON.stringify(expected) + ' ' + payload.public_key;
     const command = 'umask 077; install -d -m 700 /root/.ssh && touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && (grep -qxF -- '+quote(line)+' /root/.ssh/authorized_keys || printf \'%s\\n\' '+quote(line)+' >> /root/.ssh/authorized_keys)';
+    stage = 'SSH_KEY_INSTALL';
     const result = await ssh.execCommand(command);
     if (result.code !== 0) throw new Error('Key installation failed');
     return {host_key:hostKey};
+  } catch (error) {
+    if (stage === 'SSH_CONNECT' && error.level === 'client-authentication') stage = 'SSH_AUTHENTICATION';
+    const safe = new Error(stage);
+    safe.setupCode = stage;
+    throw safe;
   } finally { ssh.dispose(); }
 }
 module.exports = {setup};
@@ -35,5 +44,10 @@ if (require.main === module || process.argv[1] === undefined) {
   let input = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', x => {input += x; if (input.length > 65536) process.exit(1);});
-  process.stdin.on('end', () => setup(JSON.parse(input)).then(x => process.stdout.write(JSON.stringify(x))).catch(() => {process.stderr.write('VPS SSH setup failed.\n');process.exitCode=1;}));
+  process.stdin.on('end', () => Promise.resolve().then(() => setup(JSON.parse(input)))
+    .then(x => process.stdout.write(JSON.stringify(x)))
+    .catch(error => {
+      process.stdout.write(JSON.stringify({setup_error:error.setupCode || 'SSH_INPUT'}));
+      process.exitCode=1;
+    }));
 }
