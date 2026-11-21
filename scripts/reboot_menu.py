@@ -10,6 +10,8 @@ import vps
 
 def init(db):
     db.executescript('''
+      CREATE TABLE IF NOT EXISTS bot_health (id INTEGER PRIMARY KEY CHECK(id=1), last_poll REAL NOT NULL DEFAULT 0, error_code TEXT NOT NULL DEFAULT '');
+      INSERT OR IGNORE INTO bot_health(id) VALUES (1);
       CREATE TABLE IF NOT EXISTS bot_cursor (id INTEGER PRIMARY KEY CHECK(id=1), offset INTEGER NOT NULL);
       INSERT OR IGNORE INTO bot_cursor VALUES (1,0);
       CREATE TABLE IF NOT EXISTS reboot_menus (
@@ -37,8 +39,7 @@ def owner(message, user, settings):
 def process(db, settings, update, api, now=None):
     now = time.time() if now is None else now
     inventory = vps.load()
-    if not inventory.get('telegram_reboot_enabled'):
-        return
+    enabled = inventory.get('telegram_reboot_enabled', False)
     message = update.get('message')
     if message:
         if not owner(message, message.get('from', {}), settings): return
@@ -47,6 +48,9 @@ def process(db, settings, update, api, now=None):
         text = message.get('text', '').strip().casefold()
         command = re.fullmatch(r'/?reboot(?:@([a-z0-9_]+))?', text)
         if not command or (command.group(1) and command.group(1) != settings.get('bot_username', '').casefold()): return
+        if not enabled:
+            api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'], 'text':'Reboot controls are OFF or setup did not finish. Run sudo vps-manage on the n8n VPS, or enable option r in sudo telegram. No servers were rebooted.'})
+            return
         servers = vps.eligible(inventory)
         if not servers:
             api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'], 'text':'No eligible servers. Run sudo vps-manage on the n8n VPS. The n8n host cannot be rebooted here.'})
@@ -64,6 +68,9 @@ def process(db, settings, update, api, now=None):
         return
     callback = update.get('callback_query', {})
     if not callback or not owner(callback.get('message', {}), callback.get('from', {}), settings): return
+    if not enabled:
+        api(settings['token'], 'answerCallbackQuery', {'callback_query_id':callback['id'], 'text':'Reboot controls are OFF. No action taken.'})
+        return
     data = callback.get('data', '')
     match = re.fullmatch(r'rb:([a-f0-9]{24}):(go|cancel|pick:([a-f0-9]{12}))', data)
     if not match: return
@@ -121,7 +128,7 @@ def process(db, settings, update, api, now=None):
 
 
 def tick(db, settings, api, lock_path, now=None):
-    if not settings.get('token') or not settings.get('chat_id') or not vps.load().get('telegram_reboot_enabled'):
+    if not settings.get('token') or not settings.get('chat_id'):
         return
     init(db)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -131,6 +138,8 @@ def tick(db, settings, api, lock_path, now=None):
         offset = db.execute('SELECT offset FROM bot_cursor WHERE id=1').fetchone()[0]
         updates = api(settings['token'], 'getUpdates', {'offset':offset, 'timeout':1, 'limit':100,
             'allowed_updates':['message','callback_query']})
+        db.execute("UPDATE bot_health SET last_poll=?, error_code='' WHERE id=1", (time.time() if now is None else now,))
+        db.commit()
         for update in updates:
             if update['update_id'] < offset: continue
             # A persistent cursor prevents old commands being replayed after restart.

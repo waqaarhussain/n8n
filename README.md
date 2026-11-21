@@ -455,3 +455,20 @@ of existing workflow alert subscriptions. No new workflow alert subscriptions ar
 enabled by the VPS manager. Successful servers still report required reboots when
 other servers failed, using stored display names. The n8n host's reboot is always
 manual. Reboot results confirm scheduling, not that the server has come back online.
+
+### Telegram command responsiveness and status
+
+Reboot commands poll independently from PostgreSQL/Docker failure checks and alert
+delivery, using a separate daemon worker in the existing service. Healthy polling
+uses a one-second long poll and short idle pause, so a new command or selection
+normally responds within a couple of seconds. Network/provider outages can still
+delay replies. Disabled or unfinished reboot setup replies to an authenticated
+owner's fresh `reboot` command with instructions instead of silently discarding it.
+No reboot becomes enabled merely by receiving that message.
+
+Run `sudo n8n-live telegram-status` to see the configured bot name, command poll
+heartbeat, safe API/error code, global control state and per-server key readiness
+or n8n protection. It does not show tokens, passwords or keys, and does not consume
+bot messages. Old commands remain excluded from replay: after updating/restarting,
+send a fresh message. A 409 polling error is surfaced for checking another bot
+consumer/webhook rather than silently disabling command handling.

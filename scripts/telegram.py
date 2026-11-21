@@ -16,6 +16,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import threading
 from datetime import datetime
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlsplit
@@ -389,32 +390,70 @@ def helper():
             print('Choose a listed option.')
 
 
+def command_monitor():
+    """Commands must not wait for PostgreSQL, Docker or failure-alert delivery."""
+    import reboot_menu
+    while True:
+        delay = 0.2
+        try:
+            settings = config()
+            if not settings.get('token') or not settings.get('chat_id'):
+                delay = POLL_SECONDS
+            with closing(database()) as db:
+                reboot_menu.tick(db, settings, api, STATE.parent/'telegram-updates.lock')
+        except Exception as exc:
+            code = str(exc.code) if isinstance(exc, TelegramError) else type(exc).__name__
+            print('Telegram command polling unavailable (code ' + code + '); retrying.', flush=True)
+            try:
+                with closing(database()) as db:
+                    reboot_menu.init(db)
+                    db.execute('UPDATE bot_health SET error_code=? WHERE id=1', (code,))
+                    db.commit()
+            except Exception:
+                pass
+            delay = max(2, exc.retry_after) if isinstance(exc, TelegramError) else 2
+        time.sleep(delay)
+
+
+def status():
+    import reboot_menu, vps
+    settings = config()
+    inventory = vps.load()
+    print('Bot: @' + settings.get('bot_username', 'not recorded'))
+    print('Telegram chat configured: ' + ('YES' if settings.get('token') and settings.get('chat_id') else 'NO'))
+    print('Reboot controls: ' + ('ON' if inventory.get('telegram_reboot_enabled') else 'OFF (finish sudo vps-manage, or enable option r in sudo telegram)'))
+    for server in inventory.get('servers', []):
+        mode = 'n8n HOST: REBOOT BLOCKED' if vps.protected(server, inventory) else ('reboot key ready' if server.get('reboot_ready') and (vps.KEYS/server['id']).is_file() and (vps.KEYS/(server['id']+'.known_hosts')).is_file() else 'reboot key NOT READY: run sudo vps-manage')
+        print(server['name'] + ' | ' + server['host'] + ' | ' + mode)
+    with closing(database()) as db:
+        reboot_menu.init(db)
+        row = db.execute('SELECT * FROM bot_health WHERE id=1').fetchone()
+        print('Last command poll: ' + (str(round(max(0, time.time()-row['last_poll']))) + ' seconds ago' if row['last_poll'] else 'not recorded yet'))
+        if row['error_code']:
+            print('Last polling error code: ' + row['error_code'])
+            if row['error_code'] == '409':
+                print('Check whether another service is using getUpdates or a webhook for the same bot.')
+    print('Send a NEW reboot message in the bound private bot chat. Old commands are not replayed.')
+
+
 def monitor():
     lock = Path('data/telegram-monitor.lock').open('w')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    threading.Thread(target=command_monitor, name='telegram-commands', daemon=True).start()
     verified = False
-    next_alert_check = 0
     while True:
-        delay = POLL_SECONDS
         try:
             settings = config()
             with closing(database()) as db:
-                if settings.get('chat_id') and time.time() >= next_alert_check and db.execute('SELECT 1 FROM subscriptions WHERE enabled=1 LIMIT 1').fetchone():
-                    next_alert_check = time.time() + POLL_SECONDS
+                if settings.get('chat_id') and db.execute('SELECT 1 FROM subscriptions WHERE enabled=1 LIMIT 1').fetchone():
                     if not verified:
                         verify_schema()
                         verified = True
                     tick(db, settings)
-                if settings.get('chat_id'):
-                    import reboot_menu, vps
-                    if vps.load().get('telegram_reboot_enabled'):
-                        delay = 1
-                    reboot_menu.tick(db, settings, api, STATE.parent/'telegram-updates.lock')
         except Exception as exc:
             # Never print exception text: an HTTP exception can contain the token URL.
-            print(f'Telegram monitor unavailable ({type(exc).__name__}); retrying.', flush=True)
-            delay = max(POLL_SECONDS, exc.retry_after) if isinstance(exc, TelegramError) else POLL_SECONDS
-        time.sleep(delay)
+            print(f'Telegram alerts unavailable ({type(exc).__name__}); retrying.', flush=True)
+        time.sleep(POLL_SECONDS)
 
 
 def main():
@@ -426,6 +465,8 @@ def main():
         elif mode == 'setup':
             if input('Connect Telegram failure alerts now? [y/N]: ').strip().lower() == 'y':
                 setup()
+        elif mode == 'status':
+            status()
         elif mode == 'helper':
             helper()
         else:
