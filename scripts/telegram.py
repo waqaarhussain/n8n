@@ -56,7 +56,7 @@ def api(token, method, payload=None):
                       data=json.dumps(payload or {}).encode(),
                       headers={'Content-Type': 'application/json'}, method='POST')
     try:
-        with urlopen(request, timeout=20) as response:
+        with urlopen(request, timeout=30 if method == 'getUpdates' else 20) as response:
             result = json.load(response)
     except HTTPError as exc:
         try:
@@ -408,7 +408,7 @@ def command_monitor():
     """Commands must not wait for PostgreSQL, Docker or failure-alert delivery."""
     import reboot_menu
     while True:
-        delay = 0.2
+        delay = 0
         try:
             settings = config()
             if not settings.get('token') or not settings.get('chat_id'):
