@@ -17,7 +17,7 @@ class SSH {
   async execCommand(command) {commands.push(command);return {code:0,stdout:command==='id -u'?'0':''};}
   dispose() {}
 }
-const forced="flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-reboot-pending && /sbin/shutdown -r +1 && touch /run/n8n-reboot-pending'";
+const forced="case \"$SSH_ORIGINAL_COMMAND\" in status) cat /proc/sys/kernel/random/boot_id;; reboot) flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-reboot-pending && touch /run/n8n-reboot-pending && /sbin/shutdown -r now';; *) exit 126;; esac";
 (async () => {
   const payload={credential:{host:'192.0.2.1',username:'root',password:'never-in-command'},public_key:'ssh-ed25519 YWJj n8n-reboot-only',forced_command:forced};
   // Production has an IMAP startup preload that logs to stdout. Reproduce the
@@ -45,6 +45,26 @@ const forced="flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-r
   assert(commands[1].includes('restrict,command='));
   assert(commands[1].includes('authorized_keys'));
   assert(!commands.join().includes('never-in-command'));
+  // Replace the managed legacy key atomically, preserving unrelated access.
+  const fs=require('node:fs');
+  const path=require('node:path');
+  const dir=fs.mkdtempSync('/tmp/reboot-key-test-');
+  try {
+    const file=path.join(dir,'authorized_keys');
+    fs.writeFileSync(file,'ssh-ed25519 b3RoZXI other-user\nrestrict,command="old" '+payload.public_key+'\n');
+    const install=commands[1].replaceAll('/root/.ssh',dir);
+    for (let i=0;i<2;i++) {
+      const applied=spawnSync('/bin/sh',['-c',install],{encoding:'utf8'});
+      assert.equal(applied.status,0,applied.stderr);
+    }
+    const lines=fs.readFileSync(file,'utf8').trim().split('\n').filter(Boolean);
+    assert.equal(lines.length,2);
+    assert(lines.includes('ssh-ed25519 b3RoZXI other-user'));
+    assert.equal(lines.filter(line=>line.includes(payload.public_key)).length,1);
+    assert(!lines.some(line=>line.includes('command="old"')));
+    assert(lines.some(line=>line.includes('shutdown -r now')));
+  } finally {fs.rmSync(dir,{recursive:true,force:true});}
+
   await assert.rejects(setup({...payload,expected_key:'ssh-ed25519 different'},SSH));
   await assert.rejects(setup({...payload,forced_command:'reboot now'},SSH));
   const wf=require('/tmp/vps-generated.json');

@@ -65,6 +65,7 @@ case "$cmd" in
     docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 school-bridge python setup.py --select-calendar
     python3 scripts/import-school.py
     ;;
+  reboot-setup) backup; python3 scripts/vps.py --keys-only ;;
   vps-manage) backup; python3 scripts/vps.py ;;
   vps-import) python3 scripts/import-vps.py ;;
   school-groups)
