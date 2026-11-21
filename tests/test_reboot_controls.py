@@ -336,3 +336,23 @@ def test_key_setup_only_exposes_fixed_diagnostics(state, monkeypatch, code):
         assert str(result.value) == code
     else:
         assert 'private-password' not in str(result.value)
+
+
+def test_setup_helper_disables_stdout_preload_only_for_its_own_process(state, monkeypatch):
+    vps.KEYS.mkdir()
+    key = vps.KEYS/server(1)['id']
+    key.write_text('private-test-key')
+    key.with_suffix('.pub').write_text('ssh-ed25519 YWJj test')
+    calls = []
+    def docker(*args, **kwargs):
+        calls.append((args, kwargs))
+        return MagicMock(stdout=json.dumps({'host_key':'ssh-ed25519 YWJj'}))
+    monkeypatch.setattr(vps, 'docker', docker)
+    item = server(1)
+    vps.setup_key(item, {'host':'192.0.2.1', 'port':22, 'username':'root', 'password':'secret'})
+    args, kwargs = calls[0]
+    assert args[:7] == ('exec', '-T', '-e', 'NODE_OPTIONS=', 'n8n', 'node', '-e')
+    assert 'secret' not in str(args)
+    assert item['reboot_ready'] is True
+    assert (vps.KEYS/(item['id']+'.known_hosts')).read_text() == '192.0.2.1 ssh-ed25519 YWJj\n'
+    assert 'NODE_OPTIONS=' not in Path('compose.yml').read_text()

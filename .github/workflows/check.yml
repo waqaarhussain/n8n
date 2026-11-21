@@ -26,7 +26,7 @@ jobs:
           servers = [{'id': f'{n:012x}', 'name': f'Server {n}', 'credential_id': f'Cred{n}', 'credential_name': f'Cred {n}', 'is_n8n_host': n == 3} for n in (1,2,3)]
           json.dump(vps.build_workflow(servers), open('/tmp/vps-generated.json', 'w'))
           PYCODE
-          docker run --rm --entrypoint node -v "$PWD/tests:/tests:ro" -v "$PWD/scripts:/scripts:ro" -v /tmp/vps-generated.json:/tmp/vps-generated.json:ro docker.n8n.io/n8nio/n8n:2.47.5 /tests/vps_setup_smoke.cjs > /tmp/vps-multi-execution.json
+          docker run --rm --entrypoint node -v "$PWD/tests:/tests:ro" -v "$PWD/scripts:/scripts:ro" -v "$PWD/engine:/engine:ro" -v /tmp/vps-generated.json:/tmp/vps-generated.json:ro docker.n8n.io/n8nio/n8n:2.47.5 /tests/vps_setup_smoke.cjs > /tmp/vps-multi-execution.json
           python - <<'PYCODE'
           import sys
           sys.path.insert(0, 'scripts')
