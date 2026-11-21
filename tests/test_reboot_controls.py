@@ -223,3 +223,27 @@ def test_failed_batch_can_report_reboots_from_successful_progress_nodes():
     graph={'resultData':{'runData':{'Result 000000000001':[{'data':{'main':[[{'json':result}]]}}],
         'Result 000000000002':[{'data':{'main':[[{'json':failed}]]}}]}}}
     assert tg.reboot_names(flatten(graph))==['External VPS']
+
+
+def test_menu_polling_is_responsive_without_speeding_failure_queries(state, tmp_path, monkeypatch):
+    db,_,_,inventory=state
+    (tmp_path/'data').mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tg,'config',lambda:SETTINGS)
+    db.execute("INSERT INTO subscriptions VALUES ('school',1,'2026-11-21')");db.commit()
+    alerts=MagicMock();controls=MagicMock()
+    monkeypatch.setattr(tg,'tick',alerts)
+    monkeypatch.setattr(tg,'verify_schema',MagicMock())
+    monkeypatch.setattr(menu,'tick',controls)
+    clock=[0]
+    monkeypatch.setattr(tg.time,'time',lambda:clock[0])
+    pauses=[]
+    class Done(BaseException):pass
+    def sleep(delay):
+        pauses.append(delay);clock[0]+=2
+        if len(pauses)==12:raise Done()
+    monkeypatch.setattr(tg.time,'sleep',sleep)
+    with pytest.raises(Done):tg.monitor()
+    assert controls.call_count==12
+    assert alerts.call_count==2
+    assert pauses==[1]*12

@@ -129,7 +129,7 @@ def tick(db, settings, api, lock_path, now=None):
         try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: return  # Interactive bot setup owns getUpdates temporarily.
         offset = db.execute('SELECT offset FROM bot_cursor WHERE id=1').fetchone()[0]
-        updates = api(settings['token'], 'getUpdates', {'offset':offset, 'timeout':0, 'limit':100,
+        updates = api(settings['token'], 'getUpdates', {'offset':offset, 'timeout':1, 'limit':100,
             'allowed_updates':['message','callback_query']})
         for update in updates:
             if update['update_id'] < offset: continue

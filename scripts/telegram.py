@@ -393,22 +393,28 @@ def monitor():
     lock = Path('data/telegram-monitor.lock').open('w')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     verified = False
+    next_alert_check = 0
     while True:
+        delay = POLL_SECONDS
         try:
             settings = config()
             with closing(database()) as db:
-                if settings.get('chat_id') and db.execute('SELECT 1 FROM subscriptions WHERE enabled=1 LIMIT 1').fetchone():
+                if settings.get('chat_id') and time.time() >= next_alert_check and db.execute('SELECT 1 FROM subscriptions WHERE enabled=1 LIMIT 1').fetchone():
+                    next_alert_check = time.time() + POLL_SECONDS
                     if not verified:
                         verify_schema()
                         verified = True
                     tick(db, settings)
                 if settings.get('chat_id'):
-                    import reboot_menu
+                    import reboot_menu, vps
+                    if vps.load().get('telegram_reboot_enabled'):
+                        delay = 1
                     reboot_menu.tick(db, settings, api, STATE.parent/'telegram-updates.lock')
         except Exception as exc:
             # Never print exception text: an HTTP exception can contain the token URL.
             print(f'Telegram monitor unavailable ({type(exc).__name__}); retrying.', flush=True)
-        time.sleep(POLL_SECONDS)
+            delay = max(POLL_SECONDS, exc.retry_after) if isinstance(exc, TelegramError) else POLL_SECONDS
+        time.sleep(delay)
 
 
 def main():
