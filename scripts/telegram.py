@@ -28,11 +28,25 @@ STATE = Path('data/telegram.sqlite3')
 POLL_SECONDS = 20
 
 
-class TelegramError(Exception):
-    def __init__(self, code=0, retry_after=60):
-        super().__init__(f'Telegram request failed (code {code}).')
-        self.code = code
-        self.retry_after = max(1, min(int(retry_after), 86400))
+from telegram_errors import TelegramError
+
+
+def api_error(method, code, body):
+    # Classify known API descriptions; never log raw responses, IDs or URLs.
+    description = str(body.get('description', '')).casefold()
+    reason = 'REQUEST_REJECTED'
+    for phrase, category in (
+        ('query is too old', 'CALLBACK_EXPIRED'),
+        ('query id is invalid', 'CALLBACK_EXPIRED'),
+        ('message is not modified', 'MESSAGE_UNCHANGED'),
+        ('message to edit not found', 'MESSAGE_NOT_FOUND'),
+        ("message can't be edited", 'MESSAGE_NOT_EDITABLE'),
+        ('chat not found', 'CHAT_NOT_FOUND'),
+    ):
+        if phrase in description:
+            reason = category
+            break
+    return TelegramError(code, body.get('parameters', {}).get('retry_after', 60), method, reason)
 
 
 def api(token, method, payload=None):
@@ -49,11 +63,11 @@ def api(token, method, payload=None):
             body = json.loads(exc.read(65536))
         except (ValueError, OSError):
             body = {}
-        raise TelegramError(exc.code, body.get('parameters', {}).get('retry_after', 60)) from None
+        raise api_error(method, exc.code, body) from None
     except (URLError, TimeoutError, OSError, ValueError):
-        raise TelegramError() from None
+        raise TelegramError(method=method, reason='TRANSPORT') from None
     if not result.get('ok'):
-        raise TelegramError(result.get('error_code', 0), result.get('parameters', {}).get('retry_after', 60))
+        raise api_error(method, result.get('error_code', 0), result)
     return result.get('result')
 
 
@@ -403,7 +417,8 @@ def command_monitor():
                 reboot_menu.tick(db, settings, api, STATE.parent/'telegram-updates.lock')
         except Exception as exc:
             code = str(exc.code) if isinstance(exc, TelegramError) else type(exc).__name__
-            print('Telegram command polling unavailable (code ' + code + '); retrying.', flush=True)
+            detail = (' method=' + exc.method + ' reason=' + exc.reason) if isinstance(exc, TelegramError) else ''
+            print('Telegram command polling unavailable (code ' + code + detail + '); retrying.', flush=True)
             try:
                 with closing(database()) as db:
                     reboot_menu.init(db)
@@ -411,7 +426,7 @@ def command_monitor():
                     db.commit()
             except Exception:
                 pass
-            delay = max(2, exc.retry_after) if isinstance(exc, TelegramError) else 2
+            delay = max(2, exc.retry_after) if isinstance(exc, TelegramError) and exc.code == 429 else 2
         time.sleep(delay)
 
 

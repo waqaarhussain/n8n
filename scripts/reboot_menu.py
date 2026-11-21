@@ -6,6 +6,7 @@ import secrets
 import time
 
 import vps
+from telegram_errors import TelegramError
 
 
 def init(db):
@@ -77,7 +78,14 @@ def process(db, settings, update, api, now=None):
     nonce, action, sid = match.group(1), match.group(2), match.group(3)
     row = db.execute('SELECT * FROM reboot_menus WHERE nonce=? AND chat_id=?', (nonce, str(settings['chat_id']))).fetchone()
     def answer(text):
-        api(settings['token'], 'answerCallbackQuery', {'callback_query_id':callback['id'], 'text':text})
+        try:
+            api(settings['token'], 'answerCallbackQuery', {'callback_query_id':callback['id'], 'text':text})
+            return True
+        except Exception as error:
+            # An expired toast must not block checkbox rendering or cancellation.
+            if getattr(error, 'code', None) == 400 and getattr(error, 'reason', '') == 'CALLBACK_EXPIRED':
+                return False
+            raise
     if not row or row['state'] != 'open' or row['expires'] <= now or row['message_id'] != callback['message'].get('message_id'):
         answer('Menu expired or already used. Send reboot for a new menu.')
         return
@@ -103,6 +111,11 @@ def process(db, settings, update, api, now=None):
     if not selected:
         answer('Select at least one eligible server first.')
         return
+    # A stale click cannot consume the menu, reserve a cooldown, or reboot.
+    if not answer('Reboot requests started'):
+        api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'],
+            'text':'That reboot click expired. Send reboot for a fresh menu. No servers were rebooted.'})
+        return
     recent = {r['server_id'] for r in db.execute('SELECT server_id FROM reboot_requests WHERE requested_at>?', (now-180,))}
     # Consume before any network action. Crashes/ambiguous SSH outcomes never auto-retry a reboot.
     changed = db.execute("UPDATE reboot_menus SET state='dispatched' WHERE nonce=? AND state='open'", (nonce,)).rowcount
@@ -111,7 +124,6 @@ def process(db, settings, update, api, now=None):
         if server_id not in recent:
             db.execute('INSERT OR REPLACE INTO reboot_requests VALUES (?,?)', (server_id, now))
     db.commit()
-    answer('Reboot requests started')
     lines = []
     for server_id in sorted(selected):
         name = allowed[server_id]['name']
@@ -146,4 +158,15 @@ def tick(db, settings, api, lock_path, now=None):
             offset = update['update_id'] + 1
             db.execute('UPDATE bot_cursor SET offset=? WHERE id=1', (offset,))
             db.commit()
-            process(db, settings, update, api, now)
+            try:
+                process(db, settings, update, api, now)
+            except Exception as error:
+                # A rejected callback response must not discard the rest of this
+                # batch or pause all buttons for the alert retry interval.
+                if not isinstance(error, TelegramError):
+                    raise
+                db.rollback()
+                print('Telegram update response failed (method=' + error.method +
+                      ' code=' + str(error.code) + ' reason=' + error.reason + ').', flush=True)
+                if error.code == 429:
+                    raise

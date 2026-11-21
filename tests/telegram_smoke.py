@@ -5,8 +5,10 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import sys
 
 root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(root/'scripts'))
 spec = importlib.util.spec_from_file_location('telegram_smoke_helper', root/'scripts/telegram.py')
 tg = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(tg)

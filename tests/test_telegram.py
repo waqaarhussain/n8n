@@ -174,3 +174,11 @@ def test_telegram_errors_never_include_token_url(monkeypatch):
         tg.api(token, 'sendMessage')
     assert token not in str(exc.value)
     assert 'api.telegram.org' not in str(exc.value)
+
+
+def test_api_error_classifies_callback_expiry_without_exposing_description():
+    error = tg.api_error('answerCallbackQuery', 400, {
+        'description':'Bad Request: query is too old and response timeout expired or query ID is invalid private-token'})
+    assert error.method == 'answerCallbackQuery'
+    assert error.reason == 'CALLBACK_EXPIRED'
+    assert 'private-token' not in str(vars(error))
