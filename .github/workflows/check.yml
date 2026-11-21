@@ -17,6 +17,22 @@ jobs:
         run: docker run --rm --entrypoint node -e N8N_FAST_MAIL_TEST=1 -v "$PWD/engine/fast-mail.cjs:/opt/n8n-fast-mail.cjs:ro" -v "$PWD/tests:/tests:ro" docker.n8n.io/n8nio/n8n:2.47.5 /tests/fast_mail_smoke.cjs
       - name: Verify maintenance nodes and execution serialization against actual n8n
         run: docker run --rm --entrypoint node -v "$PWD/tests:/tests:ro" -v "$PWD/workflows:/workflows:ro" docker.n8n.io/n8nio/n8n:2.47.5 /tests/vps_node_smoke.cjs > /tmp/vps-execution.json
+      - name: Verify restricted reboot setup and multi-server summary with real n8n dependencies
+        run: |
+          python - <<'PYCODE'
+          import sys, json
+          sys.path.insert(0, 'scripts')
+          import vps
+          servers = [{'id': f'{n:012x}', 'name': f'Server {n}', 'credential_id': f'Cred{n}', 'credential_name': f'Cred {n}', 'is_n8n_host': n == 3} for n in (1,2,3)]
+          json.dump(vps.build_workflow(servers), open('/tmp/vps-generated.json', 'w'))
+          PYCODE
+          docker run --rm --entrypoint node -v "$PWD/tests:/tests:ro" -v "$PWD/scripts:/scripts:ro" -v /tmp/vps-generated.json:/tmp/vps-generated.json:ro docker.n8n.io/n8nio/n8n:2.47.5 /tests/vps_setup_smoke.cjs > /tmp/vps-multi-execution.json
+          python - <<'PYCODE'
+          import sys
+          sys.path.insert(0, 'scripts')
+          import telegram
+          assert telegram.reboot_names(open('/tmp/vps-multi-execution.json').read()) == ['Server 1', 'Server 3']
+          PYCODE
       - run: bash -n bootstrap.sh install.sh scripts/n8n-live scripts/telegram-monitor.sh
       - run: POSTGRES_PASSWORD=test N8N_ENCRYPTION_KEY=test N8N_IMAGE=docker.n8n.io/n8nio/n8n:stable docker compose config --quiet
       - run: docker build -t school-bridge-test bridge

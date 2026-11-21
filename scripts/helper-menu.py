@@ -22,6 +22,7 @@ OPTIONS = [
     ('setup-textmebot', 'Optional TextMeBot setup (automatic messages stay off)'),
     ('check-textmebot', 'Send one TextMeBot test message'),
     ('vps-import', 'Import Monday VPS updates with private root SSH credentials'),
+    ('vps-manage', 'Add VPS servers, display names and Telegram multi-select reboots'),
     ('enable-textmebot', 'Enable configured TextMeBot email notifications'),
 ]
 

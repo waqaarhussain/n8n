@@ -1,0 +1,39 @@
+'use strict';
+// Uses the real node-ssh package inside the official n8n image; no network calls.
+const assert = require('node:assert/strict');
+const {setup} = require('/scripts/vps-ssh-setup.cjs');
+const {createRequire} = require('node:module');
+const root=createRequire('/usr/local/lib/node_modules/n8n/package.json');
+const native=createRequire(root.resolve('n8n-nodes-base/package.json'));
+assert.equal(typeof native('node-ssh').NodeSSH, 'function');
+const type=Buffer.from('ssh-ed25519');
+const size=Buffer.alloc(4);size.writeUInt32BE(type.length);
+const hostKey=Buffer.concat([size,type,Buffer.from('fake-key')]);
+const commands=[];
+class SSH {
+  async connect(options) {assert(options.hostVerifier(hostKey));}
+  async execCommand(command) {commands.push(command);return {code:0,stdout:command==='id -u'?'0':''};}
+  dispose() {}
+}
+const forced="flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-reboot-pending && /sbin/shutdown -r +1 && touch /run/n8n-reboot-pending'";
+(async () => {
+  const payload={credential:{host:'192.0.2.1',username:'root',password:'never-in-command'},public_key:'ssh-ed25519 YWJj n8n-reboot-only',forced_command:forced};
+  const result=await setup(payload,SSH);
+  assert(result.host_key.startsWith('ssh-ed25519 '));
+  assert(commands[1].includes('restrict,command='));
+  assert(commands[1].includes('authorized_keys'));
+  assert(!commands.join().includes('never-in-command'));
+  await assert.rejects(setup({...payload,expected_key:'ssh-ed25519 different'},SSH));
+  await assert.rejects(setup({...payload,forced_command:'reboot now'},SSH));
+  const wf=require('/tmp/vps-generated.json');
+  const results=wf.nodes.filter(n=>n.name.startsWith('Result '));
+  assert.equal(results.length,3);
+  const outputs=results.map((n,i)=>new Function('$input',n.parameters.jsCode)({first:()=>({json:{code:i===1?100:0,stdout:'N8N_REBOOT_REQUIRED=1'}})})[0]);
+  assert.equal(outputs[0].json.update_status,'success');
+  assert.equal(outputs[1].json.update_status,'failed');
+  assert.equal(outputs[2].json.update_status,'success');
+  const summary=wf.nodes.find(n=>n.name==='VPS reboot summary');
+  const final=new Function('$',summary.parameters.jsCode)(name=>({first:()=>outputs[results.findIndex(n=>n.name===name)]}));
+  assert.equal(final.length,3);
+  process.stdout.write(root('flatted').stringify({resultData:{runData:{'VPS reboot summary':[{data:{main:[final]}}]}}}));
+})().catch(error=>{console.error(error);process.exitCode=1;});
