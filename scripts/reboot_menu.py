@@ -3,6 +3,7 @@ import fcntl
 import json
 import re
 import secrets
+import subprocess
 import time
 
 import vps
@@ -124,10 +125,20 @@ def process(db, settings, update, api, now=None):
         db.commit()
         try:
             vps.reboot(sid)  # Independently rechecks host protection at dispatch.
-            lines.append(name+': reboot requested now. Waiting for SSH after a new boot.')
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+            # SSH exit 255 or a timeout can follow shutdown closing the connection.
+            # This is a pending request, not confirmation that the guest rebooted.
+            if isinstance(error, subprocess.CalledProcessError) and error.returncode != 255:
+                db.execute("UPDATE reboot_jobs SET state='failed' WHERE server_id=? AND requested_at=?", (sid, now))
+                db.commit()
+                lines.append(name+': reboot command was rejected. No automatic retry.')
+                continue
         except Exception:
-            # Shutdown may close SSH before it returns. Keep watching, never retry.
-            lines.append(name+': SSH disconnected or reboot could not be confirmed. Checking for a new boot; no automatic retry.')
+            db.execute("UPDATE reboot_jobs SET state='failed' WHERE server_id=? AND requested_at=?", (sid, now))
+            db.commit()
+            lines.append(name+': reboot request could not be sent. Check the server manually.')
+            continue
+        lines.append(name+': Reboot requested. Waiting for SSH to return.')
     send('\n'.join(lines))
 
 def check_online(db, settings, api, now=None):
