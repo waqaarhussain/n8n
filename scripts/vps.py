@@ -120,7 +120,9 @@ def setup_key(server, data):
     payload = {'credential': data, 'public_key': key.with_suffix('.pub').read_text().strip(),
                'forced_command': FORCED_COMMAND, 'expected_key': server.get('host_key', '')}
     try:
-        output = docker('exec', '-T', 'n8n', 'node', '-e', Path('scripts/vps-ssh-setup.cjs').read_text(),
+        # n8n's IMAP preload logs a startup banner to stdout. This isolated helper
+        # must return JSON only; changing its env does not affect the n8n process.
+        output = docker('exec', '-T', '-e', 'NODE_OPTIONS=', 'n8n', 'node', '-e', Path('scripts/vps-ssh-setup.cjs').read_text(),
                         input=json.dumps(payload), timeout=45)
     except subprocess.CalledProcessError as error:
         # Never echo arbitrary remote/CLI output, which may contain credentials.

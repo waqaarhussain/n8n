@@ -20,14 +20,22 @@ class SSH {
 const forced="flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-reboot-pending && /sbin/shutdown -r +1 && touch /run/n8n-reboot-pending'";
 (async () => {
   const payload={credential:{host:'192.0.2.1',username:'root',password:'never-in-command'},public_key:'ssh-ed25519 YWJj n8n-reboot-only',forced_command:forced};
+  // Production has an IMAP startup preload that logs to stdout. Reproduce the
+  // JSON corruption, then verify the helper's isolated NODE_OPTIONS override.
+  const inherited = {...process.env, NODE_OPTIONS:'--require=/engine/fast-mail.cjs', N8N_FAST_MAIL_TEST:'0'};
+  const noisy = spawnSync(process.execPath, ['-e', source], {input:'{invalid', encoding:'utf8', env:inherited});
+  assert.equal(noisy.status, 1);
+  assert(noisy.stdout.includes('Fast mail enabled:'));
+  assert.throws(() => JSON.parse(noisy.stdout));
+  const cleanEnv = {...inherited, NODE_OPTIONS:''};
   // Exercise the actual node -e/stdin entry point, not just the imported function.
-  const invalid = spawnSync(process.execPath, ['-e', source], {input:'{invalid', encoding:'utf8'});
+  const invalid = spawnSync(process.execPath, ['-e', source], {input:'{invalid', encoding:'utf8', env:cleanEnv});
   assert.equal(invalid.status, 1);
   assert.deepEqual(JSON.parse(invalid.stdout), {setup_error:'SSH_INPUT'});
   assert.equal(invalid.stderr, '');
   const refused = spawnSync(process.execPath, ['-e', source], {
     input:JSON.stringify({...payload, credential:{...payload.credential, host:'127.0.0.1', port:1}}),
-    encoding:'utf8', timeout:20000
+    encoding:'utf8', timeout:20000, env:cleanEnv
   });
   assert.equal(refused.status, 1);
   assert.deepEqual(JSON.parse(refused.stdout), {setup_error:'SSH_CONNECT'});
