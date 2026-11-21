@@ -122,14 +122,21 @@ def test_number_mapping_does_not_shift_when_inventory_reordered(state,monkeypatc
     reboot.assert_called_once_with(server(1)['id'])
 
 
-def test_partial_ssh_failure_continues_other_selection_without_retry(state,monkeypatch):
+@pytest.mark.parametrize('error, expected, job_state', [
+    (subprocess.TimeoutExpired('ssh',12), 'Reboot requested. Waiting for SSH to return.', 'pending'),
+    (subprocess.CalledProcessError(255,['ssh']), 'Reboot requested. Waiting for SSH to return.', 'pending'),
+    (subprocess.CalledProcessError(1,['ssh']), 'reboot command was rejected', 'failed'),
+    (OSError(), 'reboot request could not be sent', 'failed'),
+])
+def test_partial_ssh_failure_continues_other_selection_without_retry(state,monkeypatch,error,expected,job_state):
     db,calls,api,_=state
     open_menu(state)
-    reboot=MagicMock(side_effect=[subprocess.TimeoutExpired('ssh',25),None]);monkeypatch.setattr(vps,'reboot',reboot)
+    reboot=MagicMock(side_effect=[error,None]);monkeypatch.setattr(vps,'reboot',reboot)
     menu.process(db,SETTINGS,reply('1,2'),api,NOW)
     assert reboot.call_count==2
-    assert 'Server 1: SSH disconnected or reboot could not be confirmed' in calls[-1][1]['text']
-    assert 'Server 2: reboot requested now' in calls[-1][1]['text']
+    assert 'Server 1: '+expected in calls[-1][1]['text']
+    assert 'Server 2: Reboot requested. Waiting for SSH to return.' in calls[-1][1]['text']
+    assert db.execute('SELECT state FROM reboot_jobs WHERE server_id=?',(server(1)['id'],)).fetchone()[0]==job_state
     menu.process(db,SETTINGS,reply('1,2',message_id=79),api,NOW+1)
     assert reboot.call_count==2
 
