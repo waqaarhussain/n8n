@@ -19,7 +19,7 @@ NOW = 1_800_000_000
 def server(number, **kw):
     return dict(id=f'{number:012x}', name=f'Server {number}', host=f'192.0.2.{number}', port=22,
                 credential_id=f'Cred{number}', credential_name=f'Cred {number}',
-                is_n8n_host=kw.get('is_n8n_host', False), reboot_ready=True)
+                is_n8n_host=kw.get('is_n8n_host', False), reboot_ready=True, reboot_key_version=vps.KEY_VERSION)
 
 
 @pytest.fixture
@@ -30,6 +30,7 @@ def state(tmp_path, monkeypatch):
     monkeypatch.setattr(vps, 'self_addresses', lambda: {'192.0.2.3','127.0.0.1'})
     inventory = {'servers':[server(1),server(2),server(3,is_n8n_host=True)], 'telegram_reboot_enabled':True}
     vps.save(inventory)
+    monkeypatch.setattr(vps, 'boot_id', lambda _: '00000000-0000-0000-0000-000000000001')
     db = tg.database(); menu.init(db)
     calls = []
     def api(token, method, payload):
@@ -127,8 +128,8 @@ def test_partial_ssh_failure_continues_other_selection_without_retry(state,monke
     reboot=MagicMock(side_effect=[subprocess.TimeoutExpired('ssh',25),None]);monkeypatch.setattr(vps,'reboot',reboot)
     menu.process(db,SETTINGS,reply('1,2'),api,NOW)
     assert reboot.call_count==2
-    assert 'Server 1: reboot could not be confirmed' in calls[-1][1]['text']
-    assert 'Server 2: reboot scheduled' in calls[-1][1]['text']
+    assert 'Server 1: SSH disconnected or reboot could not be confirmed' in calls[-1][1]['text']
+    assert 'Server 2: reboot requested now' in calls[-1][1]['text']
     menu.process(db,SETTINGS,reply('1,2',message_id=79),api,NOW+1)
     assert reboot.call_count==2
 
@@ -181,7 +182,7 @@ def test_multi_server_workflow_preserves_schedule_attempts_all_and_host_last(sta
 
 
 def test_reboot_key_only_command_is_narrow():
-    assert '/sbin/shutdown -r +1' in vps.FORCED_COMMAND
+    assert '/sbin/shutdown -r now' in vps.FORCED_COMMAND
     assert '/var/lock/n8n-weekly-apt.lock' in vps.FORCED_COMMAND
     assert 'n8n-reboot-pending' in vps.FORCED_COMMAND
 
@@ -261,9 +262,9 @@ def test_alert_loop_starts_independent_daemon_even_when_database_checks_fail(sta
     class Done(BaseException):pass
     monkeypatch.setattr(tg.time,'sleep',MagicMock(side_effect=Done()))
     with pytest.raises(Done):tg.monitor()
-    assert worker.call_args.kwargs['target'] is tg.command_monitor
+    assert {call.kwargs['target'] for call in worker.call_args_list} == {tg.command_monitor, tg.online_monitor}
     assert worker.call_args.kwargs['daemon'] is True
-    worker.return_value.start.assert_called_once()
+    assert worker.return_value.start.call_count == 2
 
 
 def test_key_setup_rejects_changed_credential_target_before_any_ssh(state, monkeypatch):
@@ -420,3 +421,103 @@ def test_long_poll_http_timeout_exceeds_telegram_wait(monkeypatch,method,timeout
     monkeypatch.setattr(tg,'urlopen',opener)
     assert tg.api('private-token',method,{'timeout':20})==[]
     assert opener.call_args.kwargs['timeout']==timeout
+
+
+OLD_BOOT='00000000-0000-0000-0000-000000000001'
+NEW_BOOT='00000000-0000-0000-0000-000000000002'
+
+
+def pending_job(db, sid='000000000001', chat='123'):
+    db.execute('INSERT INTO reboot_jobs VALUES (?,?,?,?,?,?)', (sid,'srv-albania',chat,OLD_BOOT,NOW,'pending'))
+    db.commit()
+
+
+def test_online_requires_authenticated_ssh_and_different_boot_id(state,monkeypatch):
+    db,calls,api,_=state
+    pending_job(db)
+    probe=MagicMock(side_effect=[subprocess.TimeoutExpired('ssh',12),OLD_BOOT,NEW_BOOT])
+    monkeypatch.setattr(vps,'boot_id',probe)
+    for now in (NOW+5,NOW+10):
+        menu.check_online(db,SETTINGS,api,now)
+        assert not calls
+    menu.check_online(db,SETTINGS,api,NOW+15)
+    assert calls[-1][1]['text']=='srv-albania online ✅'
+    menu.check_online(db,SETTINGS,api,NOW+20)
+    assert len(calls)==1 and probe.call_count==3
+
+
+def test_readiness_timeout_does_not_claim_online_or_retry_reboot(state,monkeypatch):
+    db,calls,api,_=state
+    pending_job(db)
+    reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
+    menu.check_online(db,SETTINGS,api,NOW+600)
+    assert 'could not confirm SSH' in calls[-1][1]['text']
+    assert 'online ✅' not in calls[-1][1]['text']
+    reboot.assert_not_called()
+
+
+def test_online_notification_retry_survives_database_reopen_without_reboot(state,monkeypatch):
+    db,calls,api,_=state
+    pending_job(db)
+    monkeypatch.setattr(vps,'boot_id',lambda _:NEW_BOOT)
+    def fail(*args): raise tg.TelegramError(500)
+    menu.check_online(db,SETTINGS,fail,NOW+5)
+    assert db.execute('SELECT state FROM reboot_jobs').fetchone()[0]=='online'
+    reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
+    with tg.database() as reopened:
+        menu.check_online(reopened,SETTINGS,api,NOW+10)
+    assert calls[-1][1]['text']=='srv-albania online ✅'
+    reboot.assert_not_called()
+
+
+def test_old_key_is_excluded_and_status_can_never_use_legacy_reboot_key(state,monkeypatch):
+    _,_,_,settings=state
+    settings['servers'][0].pop('reboot_key_version')
+    vps.save(settings)
+    assert server(1)['id'] not in {s['id'] for s in vps.eligible()}
+    runner=MagicMock();monkeypatch.setattr(vps,'run',runner)
+    with pytest.raises(ValueError): vps.ssh_control(server(1)['id'],'status')
+    runner.assert_not_called()
+
+
+def test_boot_identity_is_validated_and_uses_status_command(monkeypatch):
+    probe=MagicMock(return_value=MagicMock(stdout=NEW_BOOT+'\n'))
+    monkeypatch.setattr(vps,'ssh_control',probe)
+    assert vps.boot_id('000000000001')==NEW_BOOT
+    probe.assert_called_once_with('000000000001','status')
+    probe.return_value.stdout='old setup banner'
+    with pytest.raises(ValueError):vps.boot_id('000000000001')
+
+
+def test_keys_only_upgrade_skips_prompt_and_workflow_import(state,monkeypatch):
+    _,_,_,settings=state
+    settings['servers'][0].pop('reboot_key_version')
+    vps.save(settings)
+    monkeypatch.setattr(vps,'migrate',lambda _:None)
+    add=MagicMock();imports=MagicMock()
+    monkeypatch.setattr(vps,'add',add);monkeypatch.setattr(vps,'import_value',imports)
+    monkeypatch.setattr(vps,'credential',lambda _: {})
+    def setup(server,data): server['reboot_key_version']=vps.KEY_VERSION
+    install=MagicMock(side_effect=setup);monkeypatch.setattr(vps,'setup_key',install)
+    vps.main(keys_only=True)
+    assert install.call_count==2
+    assert vps.load()['servers'][0]['reboot_key_version']==vps.KEY_VERSION
+    add.assert_not_called();imports.assert_not_called()
+
+
+def test_status_and_unknown_commands_cannot_bypass_host_protection(state,monkeypatch):
+    runner=MagicMock();monkeypatch.setattr(vps,'run',runner)
+    with pytest.raises(ValueError):vps.ssh_control(server(3)['id'],'status')
+    with pytest.raises(ValueError):vps.ssh_control(server(1)['id'],'status; reboot')
+    runner.assert_not_called()
+
+
+def test_failed_preboot_ssh_check_never_requests_reboot_or_online_job(state,monkeypatch):
+    db,calls,api,_=state
+    open_menu(state)
+    monkeypatch.setattr(vps,'boot_id',MagicMock(side_effect=OSError()))
+    reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
+    menu.process(db,SETTINGS,reply('1'),api,NOW)
+    reboot.assert_not_called()
+    assert db.execute('SELECT count(*) FROM reboot_jobs').fetchone()[0]==0
+    assert 'No reboot requested' in calls[-1][1]['text']

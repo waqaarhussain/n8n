@@ -8,7 +8,7 @@ const quote = s => "'" + s.replace(/'/g, "'\\''") + "'";
 async function setup(payload, SSH = NodeSSH) {
   const c = payload.credential;
   if (c.username !== 'root' || !/^[0-9a-fA-F:.]+$/.test(c.host) || !/^ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]*)?$/.test(payload.public_key)) throw new Error('Invalid setup');
-  const expected = "flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-reboot-pending && /sbin/shutdown -r +1 && touch /run/n8n-reboot-pending'";
+  const expected = "case \"$SSH_ORIGINAL_COMMAND\" in status) cat /proc/sys/kernel/random/boot_id;; reboot) flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-reboot-pending && touch /run/n8n-reboot-pending && /sbin/shutdown -r now';; *) exit 126;; esac";
   if (payload.forced_command !== expected) throw new Error('Invalid restricted command');
   let hostKey = '';
   const ssh = new SSH();
@@ -27,7 +27,8 @@ async function setup(payload, SSH = NodeSSH) {
     const check = await ssh.execCommand('id -u');
     if (check.code !== 0 || check.stdout.trim() !== '0' || !hostKey) throw new Error('Root/key check failed');
     const line = 'restrict,command=' + JSON.stringify(expected) + ' ' + payload.public_key;
-    const command = 'umask 077; install -d -m 700 /root/.ssh && touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && (grep -qxF -- '+quote(line)+' /root/.ssh/authorized_keys || printf \'%s\\n\' '+quote(line)+' >> /root/.ssh/authorized_keys)';
+    const identity = payload.public_key.split(' ').slice(0,2).join(' ');
+    const command = "umask 077; install -d -m 700 /root/.ssh && touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys && tmp=$(mktemp /root/.ssh/authorized_keys.XXXXXX) && { grep -vF -- " + quote(identity) + " /root/.ssh/authorized_keys > \"$tmp\"; code=$?; [ \"$code\" -le 1 ]; } && printf '\\n%s\\n' " + quote(line) + " >> \"$tmp\" && chmod 600 \"$tmp\" && mv \"$tmp\" /root/.ssh/authorized_keys";
     stage = 'SSH_KEY_INSTALL';
     const result = await ssh.execCommand(command);
     if (result.code !== 0) throw new Error('Key installation failed');

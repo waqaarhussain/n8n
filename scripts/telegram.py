@@ -430,6 +430,18 @@ def command_monitor():
         time.sleep(delay)
 
 
+def online_monitor():
+    """SSH boot checks run separately so Telegram commands stay responsive."""
+    import reboot_menu
+    while True:
+        try:
+            with closing(database()) as db:
+                reboot_menu.check_online(db, config(), api)
+        except Exception as error:
+            print('Reboot readiness monitoring unavailable ('+type(error).__name__+'); retrying.', flush=True)
+        time.sleep(5)
+
+
 def status():
     import reboot_menu, vps
     settings = config()
@@ -438,7 +450,7 @@ def status():
     print('Telegram chat configured: ' + ('YES' if settings.get('token') and settings.get('chat_id') else 'NO'))
     print('Reboot controls: ' + ('ON' if inventory.get('telegram_reboot_enabled') else 'OFF (finish sudo vps-manage, or enable option r in sudo telegram)'))
     for server in inventory.get('servers', []):
-        mode = 'n8n HOST: REBOOT BLOCKED' if vps.protected(server, inventory) else ('reboot key ready' if server.get('reboot_ready') and (vps.KEYS/server['id']).is_file() and (vps.KEYS/(server['id']+'.known_hosts')).is_file() else 'reboot key NOT READY: run sudo vps-manage')
+        mode = 'n8n HOST: REBOOT BLOCKED' if vps.protected(server, inventory) else ('reboot key ready' if server.get('reboot_ready') and server.get('reboot_key_version') == vps.KEY_VERSION and (vps.KEYS/server['id']).is_file() and (vps.KEYS/(server['id']+'.known_hosts')).is_file() else 'reboot key NOT READY: run sudo vps-manage')
         print(server['name'] + ' | ' + server['host'] + ' | ' + mode)
     with closing(database()) as db:
         reboot_menu.init(db)
@@ -455,6 +467,7 @@ def monitor():
     lock = Path('data/telegram-monitor.lock').open('w')
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     threading.Thread(target=command_monitor, name='telegram-commands', daemon=True).start()
+    threading.Thread(target=online_monitor, name='telegram-reboot-readiness', daemon=True).start()
     verified = False
     while True:
         try:

@@ -433,7 +433,7 @@ in updates and reboot-required notices but is excluded from Telegram reboots at
 both selection and execution time. Reboot it manually when appropriate.
 
 For eligible remote VPSs, setup installs a dedicated Ed25519 public key with an
-OpenSSH forced command and `restrict`: it can only schedule a reboot in one minute,
+OpenSSH forced command and `restrict`: it can only request an immediate reboot or read the kernel boot ID,
 with no shell, forwarding or interactive access. Existing SSH access is preserved.
 Private keys/known-host pins live in `config/vps-keys` (0700 directory, 0600 files)
 and are included in private backups. The first setup connection pins each SSH host
@@ -448,7 +448,7 @@ newest menu replaces older ones. Commands from other accounts/groups, forwarded
 commands, stale messages and arbitrary command/IP text are ignored. A persistent
 cursor, request cooldown and committed dispatch state prevent automatic replay.
 Ambiguous SSH outcomes are not retried automatically. The reboot key refuses while
-this project's weekly upgrade lock is held; a scheduled reboot marks `/run` so a
+this project's weekly upgrade lock is held; a reboot request marks `/run` so a
 new managed upgrade will not begin before reboot. No server is rebooted by setup.
 `sudo telegram` option **r** can disable/re-enable the reboot controls independently
 of existing workflow alert subscriptions. No new workflow alert subscriptions are
@@ -472,3 +472,14 @@ or n8n protection. It does not show tokens, passwords or keys, and does not cons
 bot messages. Old commands remain excluded from replay: after updating/restarting,
 send a fresh message. A 409 polling error is surfaced for checking another bot
 consumer/webhook rather than silently disabling command handling.
+
+To upgrade existing reboot keys without changing the weekly workflow or schedule,
+run `sudo n8n-live reboot-setup` after `sudo update-live`. Setup replaces only the
+managed public key entry and does not reboot any server. Older key versions are
+excluded until upgraded.
+
+After a Telegram reboot request, a separate worker checks authenticated SSH with five seconds
+between rounds. It sends `<saved display name> online ✅` only after SSH returns a
+new kernel boot ID, not merely a ping response or an open TCP port. Pending checks
+survive monitoring-service restarts. If no new boot is confirmed within ten minutes,
+it reports that verification timed out. Notification retries never repeat a reboot.

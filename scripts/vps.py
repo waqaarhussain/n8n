@@ -8,13 +8,15 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import sys
 from urllib.parse import urlsplit
 
 CONFIG = Path('config/vps.json')
 KEYS = Path('config/vps-keys')
 WORKFLOW_ID = 'VpsWeeklyUpdatesV1'
 # This dedicated key cannot execute arbitrary commands or forward connections.
-FORCED_COMMAND = "flock -n /var/lock/n8n-weekly-apt.lock sh -c 'test ! -e /run/n8n-reboot-pending && /sbin/shutdown -r +1 && touch /run/n8n-reboot-pending'"
+KEY_VERSION = 2
+FORCED_COMMAND = 'case "$SSH_ORIGINAL_COMMAND" in status) cat /proc/sys/kernel/random/boot_id;; reboot) flock -n /var/lock/n8n-weekly-apt.lock sh -c \'test ! -e /run/n8n-reboot-pending && touch /run/n8n-reboot-pending && /sbin/shutdown -r now\';; *) exit 126;; esac'
 
 
 def run(*args, **kwargs):
@@ -75,7 +77,7 @@ def protected(server, settings=None):
 
 def eligible(settings=None):
     settings = load() if settings is None else settings
-    return [s for s in settings['servers'] if s.get('reboot_ready') and not protected(s, settings)]
+    return [s for s in settings['servers'] if s.get('reboot_ready') and s.get('reboot_key_version') == KEY_VERSION and not protected(s, settings)]
 
 
 def credential(identity):
@@ -139,6 +141,7 @@ def setup_key(server, data):
         raise ValueError('Invalid SSH host key')
     server['host_key'] = host_key
     server['reboot_ready'] = True
+    server['reboot_key_version'] = KEY_VERSION
     known = KEYS/(server['id'] + '.known_hosts')
     label = server['host'] if int(server.get('port', 22)) == 22 else '[' + server['host'] + ']:' + str(server['port'])
     known.write_text(label + ' ' + host_key + '\n')
@@ -146,10 +149,12 @@ def setup_key(server, data):
     print('Restricted reboot key installed for: ' + server['name'] + ' (SSH host key pinned).')
 
 
-def reboot(server_id):
+def ssh_control(server_id, command):
+    if command not in {"reboot", "status"}:
+        raise ValueError("Unsupported reboot control command")
     settings = load()
     server = next((s for s in settings['servers'] if s['id'] == server_id), None)
-    if not settings.get('telegram_reboot_enabled') or server is None or protected(server, settings) or not server.get('reboot_ready'):
+    if not settings.get('telegram_reboot_enabled') or server is None or protected(server, settings) or not server.get('reboot_ready') or server.get('reboot_key_version') != KEY_VERSION:
         raise ValueError('Server is not permitted for Telegram reboot')
     if not re.fullmatch(r'[a-f0-9]{12}', server_id):
         raise ValueError('Invalid server identity')
@@ -157,10 +162,21 @@ def reboot(server_id):
     if not key.is_file() or not known.is_file():
         raise ValueError('Reboot key is unavailable; use the VPS manager')
     # Remote authorized_keys forces FORCED_COMMAND even if this argument is changed.
-    run('ssh', '-i', str(key), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
+    return run('ssh', '-i', str(key), '-o', 'IdentitiesOnly=yes', '-o', 'BatchMode=yes',
         '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + str(known),
-        '-o', 'ConnectTimeout=10', '-p', str(server.get('port', 22)),
-        'root@' + server['host'], 'reboot', timeout=25)
+        '-o', 'ConnectTimeout=5', '-p', str(server.get('port', 22)),
+        'root@' + server['host'], command, timeout=12)
+
+
+def reboot(server_id):
+    return ssh_control(server_id, 'reboot')
+
+
+def boot_id(server_id):
+    value = ssh_control(server_id, 'status').stdout.strip()
+    if not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', value):
+        raise ValueError('Invalid remote boot identity')
+    return value
 
 
 def migrate(settings):
@@ -268,7 +284,7 @@ reboot_required:ok && markers[0].endsWith('1')}}];""".replace('NAME', json.dumps
     return workflow
 
 
-def main():
+def main(keys_only=False):
     os.umask(0o077)
     stage = 'loading saved inventory'
     try:
@@ -278,7 +294,8 @@ def main():
         print('Saved servers: ' + ', '.join(s['name'] for s in settings['servers']))
         print('Only enter an IP to ADD a new server. Press Enter to prepare the saved servers.')
         stage = 'adding a new server'
-        add(settings)
+        if not keys_only:
+            add(settings)
         if not settings['servers']:
             raise ValueError('No VPS servers saved')
         for server in settings['servers']:
@@ -287,7 +304,7 @@ def main():
             if protected(server, settings):
                 server['is_n8n_host'] = True
                 server['reboot_ready'] = False
-            elif not server.get('reboot_ready') or not (KEYS/server['id']).is_file() or not (KEYS/(server['id']+'.known_hosts')).is_file():
+            elif not server.get('reboot_ready') or server.get('reboot_key_version') != KEY_VERSION or not (KEYS/server['id']).is_file() or not (KEYS/(server['id']+'.known_hosts')).is_file():
                 stage = 'exporting saved SSH credential for ' + label
                 print('Preparing reboot access for ' + label + '...', flush=True)
                 data = credential(server['credential_id'])
@@ -295,6 +312,9 @@ def main():
                 setup_key(server, data)
             stage = 'saving inventory for ' + label
             save(settings)
+        if keys_only:
+            print('Reboot controls upgraded. Weekly workflow and schedule unchanged. No servers were rebooted.')
+            return
         stage = 'importing weekly workflow'
         import_value(build_workflow(settings['servers']), 'workflow')
         stage = 'enabling reboot controls'
@@ -315,4 +335,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    main(keys_only=sys.argv[1:] == ['--keys-only'])

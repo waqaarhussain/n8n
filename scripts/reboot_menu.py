@@ -18,6 +18,9 @@ def init(db):
       CREATE TABLE IF NOT EXISTS reboot_menus (
         nonce TEXT PRIMARY KEY, chat_id TEXT NOT NULL, message_id INTEGER,
         selected TEXT NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS reboot_jobs (
+        server_id TEXT PRIMARY KEY, name TEXT NOT NULL, chat_id TEXT NOT NULL,
+        previous_boot TEXT NOT NULL, requested_at REAL NOT NULL, state TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS reboot_requests (
         server_id TEXT PRIMARY KEY, requested_at REAL NOT NULL);
     ''')
@@ -63,7 +66,7 @@ def process(db, settings, update, api, now=None):
         db.commit()
         lines = [str(i)+'. '+s['name'] for i,s in enumerate(servers,1)]
         response = send('Choose servers to reboot:\n'+'\n'.join(lines)+
-            '\n\nReply 1, 2, or 1,2 to reboot those servers, or cancel. Reboots are scheduled in 1 minute. '
+            '\n\nReply 1, 2, or 1,2 to reboot those servers, or cancel. Reboots start immediately. '
             'This list expires in 5 minutes. The n8n host is excluded.')
         db.execute('UPDATE reboot_menus SET message_id=? WHERE nonce=?', (response['message_id'], nonce))
         db.commit()
@@ -112,11 +115,54 @@ def process(db, settings, update, api, now=None):
             lines.append(name+': skipped, a reboot was recently requested.')
             continue
         try:
-            vps.reboot(sid)  # Independently rechecks host protection at dispatch.
-            lines.append(name+': reboot scheduled in 1 minute.')
+            before = vps.boot_id(sid)
         except Exception:
-            lines.append(name+': reboot could not be confirmed. Check the server before trying again.')
+            lines.append(name+': SSH readiness check failed. No reboot requested.')
+            continue
+        db.execute('INSERT OR REPLACE INTO reboot_jobs VALUES (?,?,?,?,?,?)',
+                   (sid, name, str(settings['chat_id']), before, now, 'pending'))
+        db.commit()
+        try:
+            vps.reboot(sid)  # Independently rechecks host protection at dispatch.
+            lines.append(name+': reboot requested now. Waiting for SSH after a new boot.')
+        except Exception:
+            # Shutdown may close SSH before it returns. Keep watching, never retry.
+            lines.append(name+': SSH disconnected or reboot could not be confirmed. Checking for a new boot; no automatic retry.')
     send('\n'.join(lines))
+
+def check_online(db, settings, api, now=None):
+    """A new boot ID returned by authenticated SSH proves the guest rebooted."""
+    now = time.time() if now is None else now
+    init(db)
+    if not settings.get('token') or not settings.get('chat_id'): return
+    jobs = db.execute("SELECT * FROM reboot_jobs WHERE state IN ('pending','online','timed_out') AND chat_id=?",
+                      (str(settings['chat_id']),)).fetchall()
+    for job in jobs:
+        state = job['state']
+        if state == 'pending':
+            try:
+                current = vps.boot_id(job['server_id'])
+            except Exception:
+                current = None
+            if current and current != job['previous_boot']:
+                state = 'online'
+            elif now - job['requested_at'] >= 600:
+                state = 'timed_out'
+            else:
+                continue
+            changed = db.execute("UPDATE reboot_jobs SET state=? WHERE server_id=? AND requested_at=? AND state='pending'",
+                                 (state, job['server_id'], job['requested_at'])).rowcount
+            db.commit()
+            if not changed: continue
+        text = job['name']+' online ✅' if state == 'online' else job['name']+': could not confirm SSH after a new boot within 10 minutes. Check the server manually.'
+        try:
+            api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'], 'text':text})
+        except TelegramError:
+            continue  # Persisted result retries only the notification, never reboot.
+        db.execute("UPDATE reboot_jobs SET state='notified' WHERE server_id=? AND requested_at=?",
+                   (job['server_id'], job['requested_at']))
+        db.commit()
+
 
 def tick(db, settings, api, lock_path, now=None):
     if not settings.get('token') or not settings.get('chat_id'):
