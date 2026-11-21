@@ -51,28 +51,26 @@ def open_menu(state):
     return db.execute("SELECT nonce FROM reboot_menus WHERE state='open'").fetchone()[0]
 
 
-def callback(nonce, action):
-    return {'callback_query':{'id':'callback1','from':{'id':123},'message':{'message_id':77,'chat':{'id':123,'type':'private'}},
-        'data':'rb:'+nonce+':'+action}}
+def reply(text, message_id=78, **kwargs):
+    return message(text=text, message_id=message_id, **kwargs)
 
 
-def test_menu_selects_multiple_and_never_offers_host(state, monkeypatch):
-    db, calls, api, _ = state
-    nonce = open_menu(state)
-    text = json.dumps(calls[-1][1])
-    assert 'Server 1' in text and 'Server 2' in text and 'Server 3' not in text
-    for number in (1,2):
-        menu.process(db, SETTINGS, callback(nonce, f'pick:{number:012x}'), api, NOW)
-    assert len(json.loads(db.execute('SELECT selected FROM reboot_menus').fetchone()[0])) == 2
-    reboot = MagicMock()
-    monkeypatch.setattr(vps, 'reboot', reboot)
+@pytest.mark.parametrize('text, ids', [('1',[1]), ('2',[2]), ('1,2',[1,2]), ('2, 1,1',[1,2])])
+def test_numbered_selection_is_one_shot_and_acknowledged_before_ssh(state, monkeypatch, text, ids):
+    db,calls,api,_ = state
+    open_menu(state)
+    prompt = calls[-1][1]
+    assert '1. Server 1' in prompt['text'] and '2. Server 2' in prompt['text']
+    assert 'Server 3' not in prompt['text'] and 'reply_markup' not in prompt
     def check(sid):
         assert db.execute('SELECT state FROM reboot_menus').fetchone()[0] == 'dispatched'
-    reboot.side_effect = check
-    menu.process(db, SETTINGS, callback(nonce, 'go'), api, NOW)
-    assert [c.args[0] for c in reboot.call_args_list] == [server(1)['id'],server(2)['id']]
-    menu.process(db, SETTINGS, callback(nonce, 'go'), api, NOW+1)
-    assert reboot.call_count == 2
+        assert 'Received. Processing' in calls[-1][1]['text']
+    reboot = MagicMock(side_effect=check); monkeypatch.setattr(vps,'reboot',reboot)
+    menu.process(db,SETTINGS,reply(text),api,NOW)
+    assert [c.args[0] for c in reboot.call_args_list] == [server(i)['id'] for i in ids]
+    menu.process(db,SETTINGS,reply(text,message_id=79),api,NOW)
+    assert reboot.call_count == len(ids)
+    assert {method for method,_ in calls} == {'sendMessage'}
 
 
 @pytest.mark.parametrize('change', [
@@ -81,49 +79,58 @@ def test_menu_selects_multiple_and_never_offers_host(state, monkeypatch):
     {'forward_origin':{'type':'user'}}, {'text':'reboot 192.0.2.3'}, {'text':'/reboot@otherbot'},
 ])
 def test_untrusted_stale_or_arbitrary_commands_do_nothing(state, change):
-    db, calls, api, _ = state
-    menu.process(db, SETTINGS, message(**change), api, NOW)
+    db,calls,api,_=state
+    menu.process(db,SETTINGS,message(**change),api,NOW)
     assert db.execute('SELECT count(*) FROM reboot_menus').fetchone()[0] == 0 and not calls
 
 
-def test_deselect_cancel_and_expired_buttons_never_reboot(state, monkeypatch):
-    db, calls, api, _ = state
-    nonce = open_menu(state)
-    reboot = MagicMock(); monkeypatch.setattr(vps, 'reboot', reboot)
-    pick = callback(nonce, 'pick:'+server(1)['id'])
-    menu.process(db, SETTINGS, pick, api, NOW); menu.process(db, SETTINGS, pick, api, NOW)
-    assert json.loads(db.execute('SELECT selected FROM reboot_menus').fetchone()[0]) == []
-    menu.process(db, SETTINGS, callback(nonce,'go'), api, NOW)
-    menu.process(db, SETTINGS, pick, api, NOW+301)
-    menu.process(db, SETTINGS, callback(nonce,'cancel'), api, NOW)
-    menu.process(db, SETTINGS, callback(nonce,'go'), api, NOW)
+@pytest.mark.parametrize('text', ['0', '3', '1,3', '999', 'cancel'])
+def test_invalid_numbers_and_cancel_never_reboot(state,monkeypatch,text):
+    db,calls,api,_=state
+    open_menu(state)
+    reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
+    menu.process(db,SETTINGS,reply(text),api,NOW)
+    reboot.assert_not_called()
+    assert 'No servers were rebooted' in calls[-1][1]['text']
+    assert db.execute('SELECT state FROM reboot_menus').fetchone()[0] == ('cancelled' if text=='cancel' else 'open')
+
+
+@pytest.mark.parametrize('kind', ['expired','old-reply','queued','callback','protected','old-buttons-schema'])
+def test_stale_or_newly_protected_selection_never_reboots(state,monkeypatch,kind):
+    db,calls,api,inventory=state
+    open_menu(state)
+    item=reply('1')
+    now=NOW
+    if kind=='expired': now=NOW+301; item['message']['date']=now
+    if kind=='old-reply': item['message']['reply_to_message']={'message_id':76}
+    if kind=='queued': item['message']['message_id']=76
+    if kind=='callback': item={'callback_query':{'id':'old-button'}}
+    if kind=='protected': inventory['protected_hosts']=[server(1)['host']];vps.save(inventory)
+    if kind=='old-buttons-schema': db.execute("UPDATE reboot_menus SET choices='[]'");db.commit()
+    reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
+    menu.process(db,SETTINGS,item,api,now)
     reboot.assert_not_called()
 
 
-def test_forged_host_selection_and_new_protection_are_rechecked(state, monkeypatch):
-    db, calls, api, inventory = state
-    nonce = open_menu(state)
-    db.execute('UPDATE reboot_menus SET selected=?', (json.dumps([server(3)['id']]),));db.commit()
-    reboot = MagicMock(); monkeypatch.setattr(vps,'reboot',reboot)
-    menu.process(db, SETTINGS, callback(nonce,'go'), api, NOW)
-    reboot.assert_not_called()
-    menu.process(db, SETTINGS, callback(nonce,'pick:'+server(1)['id']), api, NOW)
-    inventory['protected_hosts'] = [server(1)['host']];vps.save(inventory)
-    menu.process(db, SETTINGS, callback(nonce,'go'), api, NOW)
-    reboot.assert_not_called()
+def test_number_mapping_does_not_shift_when_inventory_reordered(state,monkeypatch):
+    db,calls,api,inventory=state
+    open_menu(state)
+    inventory['servers'].reverse();vps.save(inventory)
+    reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
+    menu.process(db,SETTINGS,reply('1'),api,NOW)
+    reboot.assert_called_once_with(server(1)['id'])
 
 
-def test_partial_ssh_failure_continues_other_selection_without_retry(state, monkeypatch):
-    db, calls, api, _ = state
-    nonce = open_menu(state)
-    for number in (1,2): menu.process(db, SETTINGS, callback(nonce,f'pick:{number:012x}'), api, NOW)
-    reboot = MagicMock(side_effect=[subprocess.TimeoutExpired('ssh',25),None]);monkeypatch.setattr(vps,'reboot',reboot)
-    menu.process(db, SETTINGS, callback(nonce,'go'), api, NOW)
-    assert reboot.call_count == 2
-    text = next(payload['text'] for method,payload in reversed(calls) if method=='sendMessage')
-    assert 'Server 1: reboot could not be confirmed' in text and 'Server 2: reboot scheduled' in text
-    menu.process(db, SETTINGS, callback(nonce,'go'), api, NOW+1)
-    assert reboot.call_count == 2
+def test_partial_ssh_failure_continues_other_selection_without_retry(state,monkeypatch):
+    db,calls,api,_=state
+    open_menu(state)
+    reboot=MagicMock(side_effect=[subprocess.TimeoutExpired('ssh',25),None]);monkeypatch.setattr(vps,'reboot',reboot)
+    menu.process(db,SETTINGS,reply('1,2'),api,NOW)
+    assert reboot.call_count==2
+    assert 'Server 1: reboot could not be confirmed' in calls[-1][1]['text']
+    assert 'Server 2: reboot scheduled' in calls[-1][1]['text']
+    menu.process(db,SETTINGS,reply('1,2',message_id=79),api,NOW+1)
+    assert reboot.call_count==2
 
 
 def test_cursor_is_persistent_and_disabled_controls_do_not_poll(state, tmp_path):
@@ -210,9 +217,8 @@ def test_reboot_cooldown_blocks_fresh_menu_repetition(state, monkeypatch):
     db, calls, api, _=state
     reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
     for stamp in (NOW,NOW+10):
-        nonce=open_menu(state)
-        menu.process(db,SETTINGS,callback(nonce,'pick:'+server(1)['id']),api,stamp)
-        menu.process(db,SETTINGS,callback(nonce,'go'),api,stamp)
+        open_menu(state)
+        menu.process(db,SETTINGS,reply('1'),api,stamp)
     assert reboot.call_count==1
 
 
@@ -240,7 +246,7 @@ def test_command_worker_never_queries_postgres_or_sends_alerts(state, tmp_path, 
         if len(pauses) == 3: raise Done()
     monkeypatch.setattr(tg.time, 'sleep', sleep)
     with pytest.raises(Done): tg.command_monitor()
-    assert controls.call_count == 3 and pauses == [0.2]*3
+    assert controls.call_count == 3 and pauses == [0]*3
     sql.assert_not_called(); alerts.assert_not_called()
 
 
@@ -358,55 +364,24 @@ def test_setup_helper_disables_stdout_preload_only_for_its_own_process(state, mo
     assert 'NODE_OPTIONS=' not in Path('compose.yml').read_text()
 
 
-@pytest.mark.parametrize('action', ['pick:000000000001', 'cancel'])
-def test_expired_callback_ack_does_not_block_selection_or_cancel(state, action):
-    db, calls, api, _ = state
-    nonce = open_menu(state)
-    def expired(token, method, payload):
-        if method == 'answerCallbackQuery':
-            raise tg.TelegramError(400, method=method, reason='CALLBACK_EXPIRED')
-        return api(token, method, payload)
-    menu.process(db, SETTINGS, callback(nonce, action), expired, NOW)
-    assert calls[-1][0] == 'editMessageReplyMarkup'
-    row = db.execute('SELECT * FROM reboot_menus').fetchone()
-    assert row['state'] == ('cancelled' if action == 'cancel' else 'open')
-    if action.startswith('pick:'):
-        assert json.loads(row['selected']) == [server(1)['id']]
-
-
-def test_expired_reboot_click_never_consumes_menu_or_reboots(state, monkeypatch):
-    db, calls, api, _ = state
-    nonce = open_menu(state)
-    menu.process(db, SETTINGS, callback(nonce, 'pick:'+server(1)['id']), api, NOW)
-    reboot = MagicMock(); monkeypatch.setattr(vps, 'reboot', reboot)
-    def expired(token, method, payload):
-        if method == 'answerCallbackQuery':
-            raise tg.TelegramError(400, method=method, reason='CALLBACK_EXPIRED')
-        return api(token, method, payload)
-    menu.process(db, SETTINGS, callback(nonce, 'go'), expired, NOW)
-    reboot.assert_not_called()
-    assert db.execute('SELECT state FROM reboot_menus').fetchone()[0] == 'open'
-    assert db.execute('SELECT count(*) FROM reboot_requests').fetchone()[0] == 0
-    assert 'No servers were rebooted' in calls[-1][1]['text']
-
-
-def test_bad_callback_response_does_not_drop_later_click_in_same_poll(state, tmp_path, capsys):
-    db, calls, api, _ = state
-    nonce = open_menu(state)
-    updates = [dict(callback(nonce, 'pick:'+server(1)['id']), update_id=2),
-               dict(callback(nonce, 'cancel'), update_id=3)]
-    failed = False
-    def reject_once(token, method, payload):
+def test_rejected_message_does_not_drop_later_command_in_same_poll(state,tmp_path,capsys):
+    db,calls,api,_=state
+    open_menu(state)
+    updates=[reply('0'),reply('cancel',message_id=79)]
+    for index,item in enumerate(updates,2): item['update_id']=index
+    failed=False
+    def reject_once(token,method,payload):
         nonlocal failed
-        if method == 'getUpdates': return updates
-        if method == 'editMessageReplyMarkup' and not failed:
-            failed = True
-            raise tg.TelegramError(400, method=method, reason='MESSAGE_UNCHANGED')
-        return api(token, method, payload)
-    menu.tick(db, SETTINGS, reject_once, tmp_path/'lock', NOW)
-    assert db.execute('SELECT state FROM reboot_menus').fetchone()[0] == 'cancelled'
-    assert db.execute('SELECT offset FROM bot_cursor').fetchone()[0] == 4
-    assert 'editMessageReplyMarkup code=400 reason=MESSAGE_UNCHANGED' in capsys.readouterr().out
+        if method=='getUpdates':
+            assert payload['timeout']==20 and payload['allowed_updates']==['message']
+            return updates
+        if not failed:
+            failed=True
+            raise tg.TelegramError(400,method=method,reason='REQUEST_REJECTED')
+        return api(token,method,payload)
+    menu.tick(db,SETTINGS,reject_once,tmp_path/'lock',NOW)
+    assert db.execute('SELECT state FROM reboot_menus').fetchone()[0]=='cancelled'
+    assert 'sendMessage code=400 reason=REQUEST_REJECTED' in capsys.readouterr().out
 
 
 @pytest.mark.parametrize('code, expected', [(400, 2), (429, 120)])
@@ -421,3 +396,27 @@ def test_poll_worker_only_uses_rate_limit_delay_for_429(state, monkeypatch, code
     monkeypatch.setattr(tg.time, 'sleep', sleep)
     with pytest.raises(Done): tg.command_monitor()
     assert delays == [expected]
+
+
+def test_failed_receipt_acknowledgement_never_dispatches_ssh(state, monkeypatch):
+    db,calls,api,_=state
+    open_menu(state)
+    reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
+    def fail(*args):
+        raise tg.TelegramError(400,method='sendMessage',reason='REQUEST_REJECTED')
+    with pytest.raises(tg.TelegramError):
+        menu.process(db,SETTINGS,reply('1,2'),fail,NOW)
+    reboot.assert_not_called()
+    assert db.execute('SELECT state FROM reboot_menus').fetchone()[0]=='dispatched'
+    menu.process(db,SETTINGS,reply('1,2',message_id=79),api,NOW)
+    reboot.assert_not_called()
+
+
+@pytest.mark.parametrize('method, timeout', [('getUpdates',30),('sendMessage',20)])
+def test_long_poll_http_timeout_exceeds_telegram_wait(monkeypatch,method,timeout):
+    response=MagicMock()
+    response.__enter__.return_value.read.return_value='{"ok":true,"result":[]}'
+    opener=MagicMock(return_value=response)
+    monkeypatch.setattr(tg,'urlopen',opener)
+    assert tg.api('private-token',method,{'timeout':20})==[]
+    assert opener.call_args.kwargs['timeout']==timeout

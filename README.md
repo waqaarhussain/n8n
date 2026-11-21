@@ -442,7 +442,7 @@ credential exports used during migration/key setup are private and removed in a
 finally block. Passwords are never included in workflow files or SSH arguments.
 
 Once configured, send `reboot` or `/reboot` to the existing Telegram bot in its bound
-private chat. Tick one or more server buttons, then press **Reboot selected**. The
+private chat. Reply with a server number such as `1`, or comma-separated numbers such as `1,2`, to reboot those servers. Reply `cancel` to close the list. The
 n8n host is not offered. Menus expire after five minutes and are single-use; the
 newest menu replaces older ones. Commands from other accounts/groups, forwarded
 commands, stale messages and arbitrary command/IP text are ignored. A persistent

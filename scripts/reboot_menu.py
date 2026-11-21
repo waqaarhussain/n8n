@@ -21,14 +21,9 @@ def init(db):
       CREATE TABLE IF NOT EXISTS reboot_requests (
         server_id TEXT PRIMARY KEY, requested_at REAL NOT NULL);
     ''')
-
-
-def buttons(nonce, servers, selected):
-    rows = [[{'text': ('☑ ' if s['id'] in selected else '☐ ') + s['name'],
-              'callback_data': 'rb:' + nonce + ':pick:' + s['id']}] for s in servers]
-    rows.append([{'text':'Reboot selected', 'callback_data':'rb:'+nonce+':go'},
-                 {'text':'Cancel', 'callback_data':'rb:'+nonce+':cancel'}])
-    return {'inline_keyboard': rows}
+    if 'choices' not in {r[1] for r in db.execute('PRAGMA table_info(reboot_menus)')}:
+        db.execute("ALTER TABLE reboot_menus ADD COLUMN choices TEXT NOT NULL DEFAULT '[]'")
+        db.commit()
 
 
 def owner(message, user, settings):
@@ -39,105 +34,89 @@ def owner(message, user, settings):
 
 def process(db, settings, update, api, now=None):
     now = time.time() if now is None else now
-    inventory = vps.load()
-    enabled = inventory.get('telegram_reboot_enabled', False)
     message = update.get('message')
-    if message:
-        if not owner(message, message.get('from', {}), settings): return
-        if message.get('forward_origin') or message.get('forward_date') or message.get('via_bot'): return
-        if not now - 120 <= message.get('date', 0) <= now + 30: return
-        text = message.get('text', '').strip().casefold()
-        command = re.fullmatch(r'/?reboot(?:@([a-z0-9_]+))?', text)
-        if not command or (command.group(1) and command.group(1) != settings.get('bot_username', '').casefold()): return
-        if not enabled:
-            api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'], 'text':'Reboot controls are OFF or setup did not finish. Run sudo vps-manage on the n8n VPS, or enable option r in sudo telegram. No servers were rebooted.'})
-            return
+    # Old inline keyboards are inert. All control now uses ordinary messages.
+    if not message or not owner(message, message.get('from', {}), settings): return
+    if message.get('forward_origin') or message.get('forward_date') or message.get('via_bot'): return
+    if not now - 120 <= message.get('date', 0) <= now + 30: return
+    text = message.get('text', '').strip().casefold()
+    command = re.fullmatch(r'/?reboot(?:@([a-z0-9_]+))?', text)
+    selection = re.fullmatch(r'[0-9]+(?:\s*,\s*[0-9]+)*', text) if len(text) <= 512 else None
+    cancel = text in {'cancel', '/cancel'}
+    if not command and not selection and not cancel: return
+    if command and command.group(1) and command.group(1) != settings.get('bot_username', '').casefold(): return
+    inventory = vps.load()
+    def send(text):
+        return api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'], 'text':text})
+    if not inventory.get('telegram_reboot_enabled', False):
+        send('Reboot controls are OFF or setup did not finish. Run sudo vps-manage on the n8n VPS, or enable option r in sudo telegram. No servers were rebooted.')
+        return
+    if command:
         servers = vps.eligible(inventory)
         if not servers:
-            api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'], 'text':'No eligible servers. Run sudo vps-manage on the n8n VPS. The n8n host cannot be rebooted here.'})
+            send('No eligible servers. Run sudo vps-manage on the n8n VPS. The n8n host cannot be rebooted here.')
             return
         nonce = secrets.token_hex(12)
-        # Only the newest menu is live; buttons from old messages become harmless.
         db.execute("UPDATE reboot_menus SET state='expired' WHERE chat_id=? AND state='open'", (str(settings['chat_id']),))
-        db.execute('INSERT INTO reboot_menus VALUES (?,?,NULL,?,?,?)', (nonce, str(settings['chat_id']), '[]', now+300, 'open'))
+        db.execute('INSERT INTO reboot_menus(nonce,chat_id,message_id,selected,expires,state,choices) VALUES (?,?,NULL,?,?,?,?)',
+                   (nonce, str(settings['chat_id']), '[]', now+300, 'open', json.dumps([s['id'] for s in servers])))
         db.commit()
-        response = api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'],
-            'text':'Select servers to reboot, then tap Reboot selected. Reboots are scheduled in 1 minute.\nThe n8n host is excluded.',
-            'reply_markup':buttons(nonce, servers, [])})
+        lines = [str(i)+'. '+s['name'] for i,s in enumerate(servers,1)]
+        response = send('Choose servers to reboot:\n'+'\n'.join(lines)+
+            '\n\nReply 1, 2, or 1,2 to reboot those servers, or cancel. Reboots are scheduled in 1 minute. '
+            'This list expires in 5 minutes. The n8n host is excluded.')
         db.execute('UPDATE reboot_menus SET message_id=? WHERE nonce=?', (response['message_id'], nonce))
         db.commit()
         return
-    callback = update.get('callback_query', {})
-    if not callback or not owner(callback.get('message', {}), callback.get('from', {}), settings): return
-    if not enabled:
-        api(settings['token'], 'answerCallbackQuery', {'callback_query_id':callback['id'], 'text':'Reboot controls are OFF. No action taken.'})
+    row = db.execute("SELECT * FROM reboot_menus WHERE chat_id=? AND state='open' ORDER BY rowid DESC LIMIT 1",
+                     (str(settings['chat_id']),)).fetchone()
+    if not row or row['expires'] <= now or not row['message_id'] or not json.loads(row['choices']):
+        send('No active server list. Send reboot for a fresh list. No servers were rebooted.')
         return
-    data = callback.get('data', '')
-    match = re.fullmatch(r'rb:([a-f0-9]{24}):(go|cancel|pick:([a-f0-9]{12}))', data)
-    if not match: return
-    nonce, action, sid = match.group(1), match.group(2), match.group(3)
-    row = db.execute('SELECT * FROM reboot_menus WHERE nonce=? AND chat_id=?', (nonce, str(settings['chat_id']))).fetchone()
-    def answer(text):
-        try:
-            api(settings['token'], 'answerCallbackQuery', {'callback_query_id':callback['id'], 'text':text})
-            return True
-        except Exception as error:
-            # An expired toast must not block checkbox rendering or cancellation.
-            if getattr(error, 'code', None) == 400 and getattr(error, 'reason', '') == 'CALLBACK_EXPIRED':
-                return False
-            raise
-    if not row or row['state'] != 'open' or row['expires'] <= now or row['message_id'] != callback['message'].get('message_id'):
-        answer('Menu expired or already used. Send reboot for a new menu.')
+    # Never apply queued messages from before the prompt or replies to an older list.
+    if message.get('message_id', 0) <= row['message_id']: return
+    reply = message.get('reply_to_message')
+    if reply and reply.get('message_id') != row['message_id']:
+        send('Reply to the latest server list or send reboot for a fresh list. No servers were rebooted.')
         return
-    servers = vps.eligible(inventory)
-    allowed = {s['id']:s for s in servers}
-    selected = set(json.loads(row['selected'])) & allowed.keys()
-    if action.startswith('pick:'):
-        if sid not in allowed:
-            answer('That server is protected or unavailable.')
-            return
-        selected.symmetric_difference_update({sid})
-        db.execute('UPDATE reboot_menus SET selected=? WHERE nonce=?', (json.dumps(sorted(selected)), nonce))
+    if cancel:
+        db.execute("UPDATE reboot_menus SET state='cancelled' WHERE nonce=?", (row['nonce'],))
         db.commit()
-        answer('Selection updated')
-        api(settings['token'], 'editMessageReplyMarkup', {'chat_id':settings['chat_id'], 'message_id':row['message_id'],
-            'reply_markup':buttons(nonce, servers, selected)})
+        send('Cancelled. No servers were rebooted.')
         return
-    if action == 'cancel':
-        db.execute("UPDATE reboot_menus SET state='cancelled' WHERE nonce=?", (nonce,))
-        db.commit(); answer('Cancelled')
-        api(settings['token'], 'editMessageReplyMarkup', {'chat_id':settings['chat_id'], 'message_id':row['message_id'], 'reply_markup':{'inline_keyboard':[]}})
+    choices = json.loads(row['choices'])
+    numbers = set(int(n.strip()) for n in text.split(','))
+    if not numbers or any(n < 1 or n > len(choices) for n in numbers):
+        send('Use only numbers from this list, separated by commas, or cancel. No servers were rebooted.')
         return
-    if not selected:
-        answer('Select at least one eligible server first.')
-        return
-    # A stale click cannot consume the menu, reserve a cooldown, or reboot.
-    if not answer('Reboot requests started'):
-        api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'],
-            'text':'That reboot click expired. Send reboot for a fresh menu. No servers were rebooted.'})
+    selected = [choices[n-1] for n in sorted(numbers)]
+    allowed = {s['id']:s for s in vps.eligible(inventory)}
+    if any(sid not in allowed for sid in selected):
+        send('A selected server is now protected or unavailable. Send reboot for a fresh list. No servers were rebooted.')
         return
     recent = {r['server_id'] for r in db.execute('SELECT server_id FROM reboot_requests WHERE requested_at>?', (now-180,))}
-    # Consume before any network action. Crashes/ambiguous SSH outcomes never auto-retry a reboot.
-    changed = db.execute("UPDATE reboot_menus SET state='dispatched' WHERE nonce=? AND state='open'", (nonce,)).rowcount
+    # Consume before network actions, with persistent cooldowns. Never replay an
+    # ambiguous request after a crash or a failed Telegram acknowledgement.
+    changed = db.execute("UPDATE reboot_menus SET state='dispatched', selected=? WHERE nonce=? AND state='open'",
+                         (json.dumps(selected), row['nonce'])).rowcount
     if not changed: return
-    for server_id in selected:
-        if server_id not in recent:
-            db.execute('INSERT OR REPLACE INTO reboot_requests VALUES (?,?)', (server_id, now))
+    for sid in selected:
+        if sid not in recent:
+            db.execute('INSERT OR REPLACE INTO reboot_requests VALUES (?,?)', (sid, now))
     db.commit()
+    send('Received. Processing reboot requests for: '+', '.join(allowed[sid]['name'] for sid in selected)+'.')
     lines = []
-    for server_id in sorted(selected):
-        name = allowed[server_id]['name']
-        if server_id in recent:
-            lines.append(name + ': skipped, a reboot was recently requested.')
+    for sid in selected:
+        name = allowed[sid]['name']
+        if sid in recent:
+            lines.append(name+': skipped, a reboot was recently requested.')
             continue
         try:
-            vps.reboot(server_id)  # Reloads inventory and rechecks n8n protection independently.
-            lines.append(name + ': reboot scheduled in 1 minute.')
+            vps.reboot(sid)  # Independently rechecks host protection at dispatch.
+            lines.append(name+': reboot scheduled in 1 minute.')
         except Exception:
-            lines.append(name + ': reboot could not be confirmed. Check the server before trying again.')
-    api(settings['token'], 'sendMessage', {'chat_id':settings['chat_id'], 'text':'\n'.join(lines)})
-    api(settings['token'], 'editMessageReplyMarkup', {'chat_id':settings['chat_id'], 'message_id':row['message_id'], 'reply_markup':{'inline_keyboard':[]}})
-
+            lines.append(name+': reboot could not be confirmed. Check the server before trying again.')
+    send('\n'.join(lines))
 
 def tick(db, settings, api, lock_path, now=None):
     if not settings.get('token') or not settings.get('chat_id'):
@@ -148,8 +127,8 @@ def tick(db, settings, api, lock_path, now=None):
         try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError: return  # Interactive bot setup owns getUpdates temporarily.
         offset = db.execute('SELECT offset FROM bot_cursor WHERE id=1').fetchone()[0]
-        updates = api(settings['token'], 'getUpdates', {'offset':offset, 'timeout':1, 'limit':100,
-            'allowed_updates':['message','callback_query']})
+        updates = api(settings['token'], 'getUpdates', {'offset':offset, 'timeout':20, 'limit':100,
+            'allowed_updates':['message']})
         db.execute("UPDATE bot_health SET last_poll=?, error_code='' WHERE id=1", (time.time() if now is None else now,))
         db.commit()
         for update in updates:
@@ -161,7 +140,7 @@ def tick(db, settings, api, lock_path, now=None):
             try:
                 process(db, settings, update, api, now)
             except Exception as error:
-                # A rejected callback response must not discard the rest of this
+                # A rejected message response must not discard the rest of this
                 # batch or pause all buttons for the alert retry interval.
                 if not isinstance(error, TelegramError):
                     raise
