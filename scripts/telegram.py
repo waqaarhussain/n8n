@@ -35,7 +35,7 @@ class TelegramError(Exception):
 
 
 def api(token, method, payload=None):
-    if method not in {'getMe', 'getWebhookInfo', 'getUpdates', 'sendMessage'}:
+    if method not in {'getMe', 'getWebhookInfo', 'getUpdates', 'sendMessage', 'answerCallbackQuery', 'editMessageReplyMarkup'}:
         raise ValueError('Unsupported Telegram method')
     request = Request(f'https://api.telegram.org/bot{token}/{method}',
                       data=json.dumps(payload or {}).encode(),
@@ -161,7 +161,14 @@ def reboot_names(serialized):
     def field(value, key):
         return ref(value[key])
     root = table[0]
-    runs = field(field(field(root, 'resultData'), 'runData'), 'VPS reboot summary')
+    run_data = field(field(root, 'resultData'), 'runData')
+    if 'VPS reboot summary' in run_data:
+        runs = field(run_data, 'VPS reboot summary')
+    else:
+        # Host/Docker upgrades can interrupt the final summary; saved progress
+        # retains earlier completed per-server results for the same workflow.
+        runs = [run for name, raw in run_data.items()
+                if re.fullmatch(r'Result [a-f0-9]{12}', name) for run in ref(raw)]
     names = []
     for raw_run in runs:
         run = ref(raw_run)
@@ -171,8 +178,13 @@ def reboot_names(serialized):
         for raw_output in outputs:
             for raw_item in ref(raw_output):
                 data = field(ref(raw_item), 'json')
-                if field(data, 'maintenance_version') != 1 or field(data, 'update_status') != 'success':
+                if field(data, 'maintenance_version') != 1:
                     raise ValueError('Invalid maintenance summary')
+                status = field(data, 'update_status')
+                if status == 'failed':
+                    continue
+                if status != 'success':
+                    raise ValueError('Invalid maintenance status')
                 name = field(data, 'vps_name')
                 reboot = field(data, 'reboot_required')
                 if not isinstance(name, str) or not name.strip() or len(name) > 100 or any(not c.isprintable() for c in name):
@@ -194,7 +206,7 @@ def reboot_executions(subscriptions):
         SELECT e.id::text AS id, e."workflowId" AS workflow_id, d.data
         FROM execution_entity e JOIN execution_data d ON d."executionId"=e.id
         WHERE e."workflowId"=''' + literal(MAINTENANCE_WORKFLOW) + '''
-          AND e.status='success' AND e."deletedAt" IS NULL
+          AND e.status IN ('success','error','crashed') AND e."deletedAt" IS NULL
           AND e."createdAt">=''' + literal(scope['enabled_at']) + '''::timestamptz
         ORDER BY e.id) r;''')
     result = []
@@ -284,6 +296,13 @@ def tick(db, settings, now=None):
 
 
 def setup():
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    with (STATE.parent/'telegram-updates.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return setup_locked()
+
+
+def setup_locked():
     old = config()
     token = getpass.getpass('Telegram bot token' + (' [Enter keeps saved token]' if old.get('token') else '') + ': ').strip() or old.get('token', '')
     if not re.fullmatch(r'\d+:[A-Za-z0-9_-]{20,}', token):
@@ -316,6 +335,9 @@ def setup():
                     api(token, 'sendMessage', {'chat_id': settings['chat_id'], 'text': '✅ n8n alerts connected.\n\nNo workflows were enabled automatically. Run telegram on your VPS to choose one.'})
                     save_config(settings)
                     with closing(database()) as db:
+                        if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='bot_cursor'").fetchone():
+                            db.execute('UPDATE bot_cursor SET offset=? WHERE id=1', (offset or 0,))
+                            db.execute("UPDATE reboot_menus SET state='expired' WHERE state='open'")
                         db.execute('UPDATE delivery_control SET next_request=0 WHERE id=1')
                         db.execute('UPDATE deliveries SET next_attempt=0 WHERE sent=0')
                         db.commit()
@@ -340,12 +362,18 @@ def helper():
             print(f"{number}) {row['name']} | {'ON' if enabled else 'OFF'}")
         if not rows:
             print('No workflows yet. Import/create one first; none will be enabled automatically.')
-        print('s) Change bot token / reconnect chat\nt) Send a test message\n0) Exit')
+        print('s) Change bot token / reconnect chat\nt) Send a test message\nr) Toggle Telegram reboot controls\n0) Exit')
         choice = input('Workflow number to toggle alerts: ').strip().lower()
         if choice in ('', '0'):
             return
         if choice == 's':
             setup()
+        elif choice == 'r':
+            import vps
+            inventory = vps.load()
+            inventory['telegram_reboot_enabled'] = not inventory.get('telegram_reboot_enabled', False)
+            vps.save(inventory)
+            print('Telegram reboot controls ' + ('ON' if inventory['telegram_reboot_enabled'] else 'OFF') + '. The n8n host is always excluded.')
         elif choice == 't':
             saved = config()
             api(saved['token'], 'sendMessage', {'chat_id': saved['chat_id'], 'text': '✅ n8n Telegram test. Failure alerts follow your selected workflows.'})
@@ -374,6 +402,9 @@ def monitor():
                         verify_schema()
                         verified = True
                     tick(db, settings)
+                if settings.get('chat_id'):
+                    import reboot_menu
+                    reboot_menu.tick(db, settings, api, STATE.parent/'telegram-updates.lock')
         except Exception as exc:
             # Never print exception text: an HTTP exception can contain the token URL.
             print(f'Telegram monitor unavailable ({type(exc).__name__}); retrying.', flush=True)

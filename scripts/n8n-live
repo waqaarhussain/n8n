@@ -10,6 +10,7 @@ cmd=${1:-update}
 [[ $(basename "$0") == school-import ]] && cmd=school-import
 [[ $(basename "$0") == telegram ]] && cmd=telegram
 [[ $(basename "$0") == school-groups ]] && cmd=school-groups
+[[ $(basename "$0") == vps-manage ]] && cmd=vps-manage
 [[ $(basename "$0") == school-reset ]] && cmd=school-reset
 backup() {
   local target="$PWD/backups/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -64,6 +65,7 @@ case "$cmd" in
     docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 school-bridge python setup.py --select-calendar
     python3 scripts/import-school.py
     ;;
+  vps-manage) backup; python3 scripts/vps.py ;;
   vps-import) python3 scripts/import-vps.py ;;
   school-groups)
     docker compose -f compose.yml -f compose.setup.yml run --rm --no-deps --user 0:0 school-bridge python school_history.py groups
@@ -106,5 +108,5 @@ case "$cmd" in
     python3 scripts/environment.py --image "$image_ref"
     docker compose up -d --wait --wait-timeout 180
     ;;
-  *) echo 'Usage: n8n-live {helper|telegram|update|backup|setup|check-icloud|check-mail|remove-whatsapp|setup-textmebot|check-textmebot|enable-textmebot|school-import|vps-import|school-groups|school-reset|web|review-last|stats|stats-reset|status|logs|upgrade-engine}'; exit 2 ;;
+  *) echo 'Usage: n8n-live {helper|telegram|update|backup|setup|check-icloud|check-mail|remove-whatsapp|setup-textmebot|check-textmebot|enable-textmebot|school-import|vps-import|vps-manage|school-groups|school-reset|web|review-last|stats|stats-reset|status|logs|upgrade-engine}'; exit 2 ;;
 esac

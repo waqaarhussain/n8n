@@ -58,7 +58,7 @@ def test_reboot_alert_opt_in_new_success_only(monkeypatch):
     rows = tg.reboot_executions([{'workflow_id': tg.MAINTENANCE_WORKFLOW, 'enabled_at': '2026-11-16T00:00Z'}])
     assert rows == [{'id': 'reboot:99', 'workflow_id': tg.MAINTENANCE_WORKFLOW, 'reboot_names': ['My VPS']}]
     query = lookup.call_args.args[0]
-    assert "e.status='success'" in query and 'e."createdAt">=' in query and 'e."deletedAt" IS NULL' in query
+    assert "e.status IN ('success','error','crashed')" in query and 'e."createdAt">=' in query and 'e."deletedAt" IS NULL' in query
 
 
 def test_reboot_delivery_retries_and_never_relabels_school_failures(tmp_path, monkeypatch):

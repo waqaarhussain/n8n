@@ -18,6 +18,7 @@ def main():
     install_shortcut(Path('/usr/local/bin/school-import'), target, 'sudo n8n-live school-import')
     install_shortcut(Path('/usr/local/bin/telegram'), target, 'sudo n8n-live telegram')
     install_shortcut(Path('/usr/local/bin/school-groups'), target, 'sudo n8n-live school-groups')
+    install_shortcut(Path('/usr/local/bin/vps-manage'), target, 'sudo n8n-live vps-manage')
     install_shortcut(Path('/usr/local/bin/school-reset'), target, 'sudo n8n-live school-reset')
 
 

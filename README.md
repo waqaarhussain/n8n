@@ -411,3 +411,47 @@ advice do not create entries. Year-group, evidence, uncertainty and duplicate gu
 continue to apply. Legacy saved entries default to activity. The extraction cache
 version changes so previously ignored deadline mail can be re-forwarded after an
 update without resetting history, re-importing or republishing the workflow.
+
+### Multiple VPS servers and Telegram reboot controls
+
+After updating, run `sudo vps-manage` (or `sudo n8n-live vps-manage`) on the n8n
+host. It takes a private backup, keeps the original VPS/SSH credential and prompts
+for additional IPs, unique display names, ports and hidden root passwords. Enter a
+blank IP when finished. Addresses/passwords stay on the host; native n8n credentials
+remain encrypted. The additional private inventory is `config/vps.json` (0600).
+The manager regenerates only **VPS weekly updates**, initially inactive, so publish
+that workflow again afterwards. Monday midnight Europe/London remains the schedule.
+It attempts each server sequentially, puts the n8n host last and records per-server
+results. An SSH/package failure does not prevent the other servers being attempted;
+the final run still fails if any update failed. Saved progress helps retain earlier
+results if a host/Docker update interrupts n8n. Service interruption during host
+package upgrades is possible even without a reboot. Package updates never reboot.
+
+The n8n host is detected from the editor URL/local addresses, or can be explicitly
+marked during setup. Protected host addresses are stored privately. It is included
+in updates and reboot-required notices but is excluded from Telegram reboots at
+both selection and execution time. Reboot it manually when appropriate.
+
+For eligible remote VPSs, setup installs a dedicated Ed25519 public key with an
+OpenSSH forced command and `restrict`: it can only schedule a reboot in one minute,
+with no shell, forwarding or interactive access. Existing SSH access is preserved.
+Private keys/known-host pins live in `config/vps-keys` (0700 directory, 0600 files)
+and are included in private backups. The first setup connection pins each SSH host
+key; later setup/reboot connections reject changed keys. Temporary decrypted n8n
+credential exports used during migration/key setup are private and removed in a
+finally block. Passwords are never included in workflow files or SSH arguments.
+
+Once configured, send `reboot` or `/reboot` to the existing Telegram bot in its bound
+private chat. Tick one or more server buttons, then press **Reboot selected**. The
+n8n host is not offered. Menus expire after five minutes and are single-use; the
+newest menu replaces older ones. Commands from other accounts/groups, forwarded
+commands, stale messages and arbitrary command/IP text are ignored. A persistent
+cursor, request cooldown and committed dispatch state prevent automatic replay.
+Ambiguous SSH outcomes are not retried automatically. The reboot key refuses while
+this project's weekly upgrade lock is held; a scheduled reboot marks `/run` so a
+new managed upgrade will not begin before reboot. No server is rebooted by setup.
+`sudo telegram` option **r** can disable/re-enable the reboot controls independently
+of existing workflow alert subscriptions. No new workflow alert subscriptions are
+enabled by the VPS manager. Successful servers still report required reboots when
+other servers failed, using stored display names. The n8n host's reboot is always
+manual. Reboot results confirm scheduling, not that the server has come back online.
