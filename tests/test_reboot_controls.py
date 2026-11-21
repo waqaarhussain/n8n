@@ -135,8 +135,8 @@ def test_cursor_is_persistent_and_disabled_controls_do_not_poll(state, tmp_path)
     assert len([c for c in calls if c[0]=='sendMessage']) == 1
     assert db.execute('SELECT offset FROM bot_cursor').fetchone()[0] == 11
     inventory['telegram_reboot_enabled']=False;vps.save(inventory)
-    never=MagicMock();menu.tick(db,SETTINGS,never,tmp_path/'lock',NOW)
-    never.assert_not_called()
+    menu.process(db,SETTINGS,message(identity=12),api,NOW)
+    assert 'controls are OFF' in calls[-1][1]['text']
 
 
 def test_protected_host_is_blocked_below_telegram_layer(state, monkeypatch):
@@ -225,28 +225,39 @@ def test_failed_batch_can_report_reboots_from_successful_progress_nodes():
     assert tg.reboot_names(flatten(graph))==['External VPS']
 
 
-def test_menu_polling_is_responsive_without_speeding_failure_queries(state, tmp_path, monkeypatch):
-    db,_,_,inventory=state
+def test_command_worker_never_queries_postgres_or_sends_alerts(state, tmp_path, monkeypatch):
+    monkeypatch.setattr(tg, 'config', lambda: SETTINGS)
+    sql = MagicMock(side_effect=AssertionError('Command worker must not use PostgreSQL'))
+    alerts = MagicMock(side_effect=AssertionError('Command worker must not send failure alerts'))
+    monkeypatch.setattr(tg, 'sql', sql)
+    monkeypatch.setattr(tg, 'tick', alerts)
+    controls = MagicMock()
+    monkeypatch.setattr(menu, 'tick', controls)
+    pauses = []
+    class Done(BaseException): pass
+    def sleep(delay):
+        pauses.append(delay)
+        if len(pauses) == 3: raise Done()
+    monkeypatch.setattr(tg.time, 'sleep', sleep)
+    with pytest.raises(Done): tg.command_monitor()
+    assert controls.call_count == 3 and pauses == [0.2]*3
+    sql.assert_not_called(); alerts.assert_not_called()
+
+
+def test_alert_loop_starts_independent_daemon_even_when_database_checks_fail(state, tmp_path, monkeypatch):
     (tmp_path/'data').mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(tg,'config',lambda:SETTINGS)
-    db.execute("INSERT INTO subscriptions VALUES ('school',1,'2026-11-21')");db.commit()
-    alerts=MagicMock();controls=MagicMock()
-    monkeypatch.setattr(tg,'tick',alerts)
-    monkeypatch.setattr(tg,'verify_schema',MagicMock())
-    monkeypatch.setattr(menu,'tick',controls)
-    clock=[0]
-    monkeypatch.setattr(tg.time,'time',lambda:clock[0])
-    pauses=[]
+    state[0].execute("INSERT INTO subscriptions VALUES ('school',1,'2026-11-21')");state[0].commit()
+    worker=MagicMock()
+    monkeypatch.setattr(tg.threading,'Thread',worker)
+    monkeypatch.setattr(tg,'verify_schema',MagicMock(side_effect=RuntimeError('Database unavailable')))
     class Done(BaseException):pass
-    def sleep(delay):
-        pauses.append(delay);clock[0]+=2
-        if len(pauses)==12:raise Done()
-    monkeypatch.setattr(tg.time,'sleep',sleep)
+    monkeypatch.setattr(tg.time,'sleep',MagicMock(side_effect=Done()))
     with pytest.raises(Done):tg.monitor()
-    assert controls.call_count==12
-    assert alerts.call_count==2
-    assert pauses==[1]*12
+    assert worker.call_args.kwargs['target'] is tg.command_monitor
+    assert worker.call_args.kwargs['daemon'] is True
+    worker.return_value.start.assert_called_once()
 
 
 def test_key_setup_rejects_changed_credential_target_before_any_ssh(state, monkeypatch):
@@ -256,3 +267,31 @@ def test_key_setup_rejects_changed_credential_target_before_any_ssh(state, monke
     runner.assert_not_called()
     mapped=server(1);mapped['host']='::ffff:192.0.2.3'
     assert vps.protected(mapped)
+
+
+def test_disabled_setup_replies_instead_of_silently_ignoring_owner(state, monkeypatch):
+    db,calls,api,inventory=state
+    inventory['telegram_reboot_enabled']=False;vps.save(inventory)
+    reboot=MagicMock();monkeypatch.setattr(vps,'reboot',reboot)
+    menu.process(db,SETTINGS,message(),api,NOW)
+    assert 'setup did not finish' in calls[-1][1]['text']
+    assert db.execute('SELECT count(*) FROM reboot_menus').fetchone()[0]==0
+    reboot.assert_not_called()
+
+
+def test_command_health_records_successful_getupdates_without_an_incoming_command(state, tmp_path):
+    db,_,_,_=state
+    api=MagicMock(return_value=[])
+    menu.tick(db,SETTINGS,api,tmp_path/'lock',NOW)
+    row=db.execute('SELECT * FROM bot_health').fetchone()
+    assert row['last_poll']==NOW and row['error_code']==''
+    assert api.call_args.args[1]=='getUpdates'
+
+
+def test_status_hides_secrets_and_reports_unfinished_reboot_keys(state, monkeypatch, capsys):
+    monkeypatch.setattr(tg,'config',lambda:SETTINGS)
+    tg.status()
+    output=capsys.readouterr().out
+    assert 'Bot: @alertsbot' in output
+    assert 'REBOOT BLOCKED' in output and 'NOT READY' in output
+    assert 'private-token' not in output
