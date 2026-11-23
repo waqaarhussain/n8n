@@ -219,8 +219,8 @@ def maintenance_text(results):
     lines = []
     for item in results:
         name = item['name']
-        lines.append(name+' updated successfully ✅')
-        lines.append(name+' requires reboot' if item['reboot_required'] else name+': no reboot required')
+        reboot = 'reboot required' if item['reboot_required'] else 'no reboot required'
+        lines.append(name+' updated successfully ✅ '+reboot)
     return '\n'.join(lines)
 
 

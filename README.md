@@ -349,8 +349,8 @@ It checks `/var/run/reboot-required` after a successful upgrade.
 Run `sudo telegram` and enable **VPS weekly updates**. The existing bot and
 per-workflow opt-in then cover ordinary failure alerts and successful maintenance
 runs, including those that do not require reboot. Each successful server reports
-`VPS name updated successfully ✅`, followed by `VPS name requires reboot` or
-`VPS name: no reboot required`. Remote Ubuntu hostnames are never used. Reboot checks are read only from
+`VPS name updated successfully ✅ reboot required` or
+`VPS name updated successfully ✅ no reboot required`, one server per line. Remote Ubuntu hostnames are never used. Reboot checks are read only from
 this workflow's fixed **VPS reboot summary** output, after opt-in, with persistent
 delivery tracking and retry. Alerts remain off until enabled; saved successful
 execution data is required. School failure-alert behavior is unchanged.

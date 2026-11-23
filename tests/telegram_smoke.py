@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory() as directory:
     identity = fixture("INSERT INTO execution_entity(\"workflowId\",status) VALUES ('VpsWeeklyUpdatesV1','success') RETURNING id;").splitlines()[0]
     fixture('INSERT INTO execution_data VALUES (' + identity + ',' + tg.literal(serialized) + ');')
     assert tg.tick(db, settings) == 1
-    assert sent[-1] == {'chat_id': '123', 'text': 'Stored VPS name updated successfully ✅\nStored VPS name requires reboot'}
+    assert sent[-1] == {'chat_id': '123', 'text': 'Stored VPS name updated successfully ✅ reboot required'}
     assert tg.tick(db, settings) == 0
     tg.set_subscription(db, tg.MAINTENANCE_WORKFLOW, False)
     assert tg.tick(db, settings) == 0
