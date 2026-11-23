@@ -1,4 +1,4 @@
-"""Opt-in Telegram alerts for saved n8n failures. Standard library only.
+"""Opt-in Telegram alerts for saved n8n failures and VPS update results. Standard library only.
 
 n8n is queried in read-only transactions. Tokens never enter command arguments,
 workflow exports, error messages or the public repository.
@@ -156,7 +156,7 @@ def failed_executions(subscriptions):
 MAINTENANCE_WORKFLOW = 'VpsWeeklyUpdatesV1'
 
 
-def reboot_names(serialized):
+def maintenance_results(serialized):
     """Read only the fixed summary node from n8n's flatted execution graph.
 
     References are followed one level per path step, not recursively: cyclic
@@ -184,7 +184,7 @@ def reboot_names(serialized):
         # retains earlier completed per-server results for the same workflow.
         runs = [run for name, raw in run_data.items()
                 if re.fullmatch(r'Result [a-f0-9]{12}', name) for run in ref(raw)]
-    names = []
+    results = []
     for raw_run in runs:
         run = ref(raw_run)
         if 'error' in run:
@@ -206,9 +206,22 @@ def reboot_names(serialized):
                     raise ValueError('Invalid VPS name')
                 if type(reboot) is not bool:
                     raise ValueError('Invalid reboot status')
-                if reboot and name not in names:
-                    names.append(name)
-    return names
+                if not any(item['name'] == name for item in results):
+                    results.append({'name':name, 'reboot_required':reboot})
+    return results
+
+
+def reboot_names(serialized):
+    return [item['name'] for item in maintenance_results(serialized) if item['reboot_required']]
+
+
+def maintenance_text(results):
+    lines = []
+    for item in results:
+        name = item['name']
+        lines.append(name+' updated successfully ✅')
+        lines.append(name+' requires reboot' if item['reboot_required'] else name+': no reboot required')
+    return '\n'.join(lines)
 
 
 def reboot_executions(subscriptions):
@@ -227,13 +240,14 @@ def reboot_executions(subscriptions):
     result = []
     for row in rows:
         try:
-            names = reboot_names(row['data'])
+            results = maintenance_results(row['data'])
         except (ValueError, KeyError, TypeError, IndexError):
             # A deleted/edited summary must not suppress other workflow alerts.
             print('Maintenance summary unavailable; inspect its execution.', flush=True)
             continue
-        if names:
-            result.append({'id': 'reboot:' + row['id'], 'workflow_id': row['workflow_id'], 'reboot_names': names})
+        if results:
+            # Keep the delivery identity so existing reboot alerts are not repeated.
+            result.append({'id': 'reboot:' + row['id'], 'workflow_id': row['workflow_id'], 'maintenance_results': results})
     return result
 
 
@@ -289,8 +303,8 @@ def tick(db, settings, now=None):
         db.execute('UPDATE deliveries SET attempts=?,next_attempt=? WHERE execution_id=?', (attempts, now + 60, row['id']))
         db.commit()
         try:
-            payload = ({'chat_id': settings['chat_id'], 'text': '\n'.join(name + ' requires reboot' for name in row['reboot_names'])}
-                       if 'reboot_names' in row else alert_payload(row, settings['chat_id'], base_url))
+            payload = ({'chat_id': settings['chat_id'], 'text': maintenance_text(row['maintenance_results'])}
+                       if 'maintenance_results' in row else alert_payload(row, settings['chat_id'], base_url))
             api(settings['token'], 'sendMessage', payload)
         except TelegramError as exc:
             delay = max(exc.retry_after, min(3600, 20 * 2 ** min(attempts, 7)))
@@ -371,7 +385,7 @@ def helper():
         with closing(database()) as db:
             subscriptions = {r['workflow_id']: r for r in db.execute('SELECT * FROM subscriptions')}
         rows = workflows()
-        print('\nTelegram alerts (failures; VPS maintenance also reports required reboots)\n')
+        print('\nTelegram alerts (failures; VPS maintenance also reports successful updates and reboot requirements)\n')
         for number, row in enumerate(rows, 1):
             enabled = row['id'] in subscriptions and subscriptions[row['id']]['enabled']
             print(f"{number}) {row['name']} | {'ON' if enabled else 'OFF'}")
@@ -454,6 +468,8 @@ def status():
         print(server['name'] + ' | ' + server['host'] + ' | ' + mode)
     with closing(database()) as db:
         reboot_menu.init(db)
+        subscription = db.execute('SELECT enabled FROM subscriptions WHERE workflow_id=?', (MAINTENANCE_WORKFLOW,)).fetchone()
+        print('VPS update Telegram alerts: ' + ('ON' if subscription and subscription['enabled'] else 'OFF (enable VPS weekly updates in sudo telegram)'))
         row = db.execute('SELECT * FROM bot_health WHERE id=1').fetchone()
         print('Last command poll: ' + (str(round(max(0, time.time()-row['last_poll']))) + ' seconds ago' if row['last_poll'] else 'not recorded yet'))
         if row['error_code']:

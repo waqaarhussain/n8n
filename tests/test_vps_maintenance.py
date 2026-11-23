@@ -56,7 +56,7 @@ def test_reboot_alert_opt_in_new_success_only(monkeypatch):
     lookup.assert_not_called()
     lookup.return_value = [{'id': '99', 'workflow_id': tg.MAINTENANCE_WORKFLOW, 'data': flatten(summary())}]
     rows = tg.reboot_executions([{'workflow_id': tg.MAINTENANCE_WORKFLOW, 'enabled_at': '2026-11-16T00:00Z'}])
-    assert rows == [{'id': 'reboot:99', 'workflow_id': tg.MAINTENANCE_WORKFLOW, 'reboot_names': ['My VPS']}]
+    assert rows == [{'id': 'reboot:99', 'workflow_id': tg.MAINTENANCE_WORKFLOW, 'maintenance_results': [{'name':'My VPS','reboot_required':True}]}]
     query = lookup.call_args.args[0]
     assert "e.status IN ('success','error','crashed')" in query and 'e."createdAt">=' in query and 'e."deletedAt" IS NULL' in query
 
@@ -69,7 +69,7 @@ def test_reboot_delivery_retries_and_never_relabels_school_failures(tmp_path, mo
     db = tg.database()
     tg.set_subscription(db, tg.MAINTENANCE_WORKFLOW, True)
     monkeypatch.setattr(tg, 'failed_executions', lambda _: [])
-    monkeypatch.setattr(tg, 'reboot_executions', lambda _: [{'id': 'reboot:99', 'workflow_id': tg.MAINTENANCE_WORKFLOW, 'reboot_names': ['Media VPS', 'Kids VPS']}])
+    monkeypatch.setattr(tg, 'reboot_executions', lambda _: [{'id': 'reboot:99', 'workflow_id': tg.MAINTENANCE_WORKFLOW, 'maintenance_results': [{'name':'Media VPS','reboot_required':True},{'name':'Kids VPS','reboot_required':True}]}])
     send = MagicMock(side_effect=tg.TelegramError(429, 120))
     monkeypatch.setattr(tg, 'api', send)
     settings = {'token': 'private', 'chat_id': '123'}
@@ -77,7 +77,7 @@ def test_reboot_delivery_retries_and_never_relabels_school_failures(tmp_path, mo
     assert tg.tick(db, settings, now=200) == 0
     send.side_effect = None
     assert tg.tick(db, settings, now=221) == 1
-    assert send.call_args.args[2] == {'chat_id': '123', 'text': 'Media VPS requires reboot\nKids VPS requires reboot'}
+    assert send.call_args.args[2] == {'chat_id': '123', 'text': 'Media VPS updated successfully ✅\nMedia VPS requires reboot\nKids VPS updated successfully ✅\nKids VPS requires reboot'}
     assert tg.tick(db, settings, now=300) == 0
     db.close()
 
@@ -169,3 +169,36 @@ def test_importer_keeps_password_out_of_workflow_and_uses_private_host(monkeypat
     assert "Media 'VPS'" in workflow['nodes'][2]['parameters']['jsCode']
     assert all('private-test-password' not in str(args) for args, kw in calls)
     assert calls[-1][0][-1] == '/tmp/waqaar-vps-workflow.json'
+
+
+@pytest.mark.parametrize('reboot', [False, True])
+def test_successful_updates_notify_even_when_no_reboot_is_needed(tmp_path, monkeypatch, reboot):
+    monkeypatch.setattr(tg,'STATE',tmp_path/'alerts.db')
+    monkeypatch.setattr(tg,'public_url',lambda:'https://n8n.example.com')
+    monkeypatch.setattr(tg,'sql',lambda _: '2026-11-23T00:00:00Z')
+    monkeypatch.setattr(tg.time,'sleep',lambda _:None)
+    db=tg.database()
+    tg.set_subscription(db,tg.MAINTENANCE_WORKFLOW,True)
+    monkeypatch.setattr(tg,'failed_executions',lambda _:[])
+    data=flatten(summary('Saved VPS',reboot))
+    monkeypatch.setattr(tg,'sql',lambda _: [{'id':'101','workflow_id':tg.MAINTENANCE_WORKFLOW,'data':data}])
+    send=MagicMock();monkeypatch.setattr(tg,'api',send)
+    settings={'token':'secret','chat_id':'123'}
+    assert tg.tick(db,settings,now=100)==1
+    text=send.call_args.args[2]['text']
+    assert 'Saved VPS updated successfully ✅' in text
+    assert ('Saved VPS requires reboot' in text)==reboot
+    assert ('no reboot required' in text)==(not reboot)
+    assert tg.tick(db,settings,now=101)==0
+    send.assert_called_once()
+    db.close()
+
+
+def test_mixed_server_summary_only_claims_success_for_successful_results():
+    graph=summary('Server A',False)
+    items=graph['resultData']['runData']['VPS reboot summary'][0]['data']['main'][0]
+    items += [{'json':{'maintenance_version':1,'vps_name':'Server B','update_status':'success','reboot_required':True}},
+              {'json':{'maintenance_version':1,'vps_name':'Failed server','update_status':'failed','reboot_required':False}}]
+    text=tg.maintenance_text(tg.maintenance_results(flatten(graph)))
+    assert 'Server A: no reboot required' in text and 'Server B requires reboot' in text
+    assert 'Failed server' not in text
