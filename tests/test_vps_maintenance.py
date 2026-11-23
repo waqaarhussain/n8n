@@ -77,7 +77,7 @@ def test_reboot_delivery_retries_and_never_relabels_school_failures(tmp_path, mo
     assert tg.tick(db, settings, now=200) == 0
     send.side_effect = None
     assert tg.tick(db, settings, now=221) == 1
-    assert send.call_args.args[2] == {'chat_id': '123', 'text': 'Media VPS updated successfully ✅\nMedia VPS requires reboot\nKids VPS updated successfully ✅\nKids VPS requires reboot'}
+    assert send.call_args.args[2] == {'chat_id': '123', 'text': 'Media VPS updated successfully ✅ reboot required\nKids VPS updated successfully ✅ reboot required'}
     assert tg.tick(db, settings, now=300) == 0
     db.close()
 
@@ -187,7 +187,7 @@ def test_successful_updates_notify_even_when_no_reboot_is_needed(tmp_path, monke
     assert tg.tick(db,settings,now=100)==1
     text=send.call_args.args[2]['text']
     assert 'Saved VPS updated successfully ✅' in text
-    assert ('Saved VPS requires reboot' in text)==reboot
+    assert ('✅ reboot required' in text)==reboot
     assert ('no reboot required' in text)==(not reboot)
     assert tg.tick(db,settings,now=101)==0
     send.assert_called_once()
@@ -200,5 +200,5 @@ def test_mixed_server_summary_only_claims_success_for_successful_results():
     items += [{'json':{'maintenance_version':1,'vps_name':'Server B','update_status':'success','reboot_required':True}},
               {'json':{'maintenance_version':1,'vps_name':'Failed server','update_status':'failed','reboot_required':False}}]
     text=tg.maintenance_text(tg.maintenance_results(flatten(graph)))
-    assert 'Server A: no reboot required' in text and 'Server B requires reboot' in text
+    assert 'Server A updated successfully ✅ no reboot required' in text and 'Server B updated successfully ✅ reboot required' in text
     assert 'Failed server' not in text
