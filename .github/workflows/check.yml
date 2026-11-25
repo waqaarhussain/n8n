@@ -36,6 +36,9 @@ jobs:
       - run: bash -n bootstrap.sh install.sh scripts/n8n-live scripts/telegram-monitor.sh
       - run: POSTGRES_PASSWORD=test N8N_ENCRYPTION_KEY=test N8N_IMAGE=docker.n8n.io/n8nio/n8n:stable docker compose config --quiet
       - run: docker build -t school-bridge-test bridge
+      - name: Verify task extraction module is shipped in the bridge image
+        run: |
+          docker run --rm school-bridge-test python -c 'from task_extract import Drafts; assert Drafts.model_validate({"tasks": []}).tasks == []'
       - name: Verify PDF, scanned PDF OCR and Word attachment extraction
         run: docker run --rm -v "$PWD/tests:/tests:ro" school-bridge-test python /tests/document_smoke.py
       - name: Verify stats pause, resume and reset in PostgreSQL

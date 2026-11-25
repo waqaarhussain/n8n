@@ -269,9 +269,9 @@ def test_alert_loop_starts_independent_daemon_even_when_database_checks_fail(sta
     class Done(BaseException):pass
     monkeypatch.setattr(tg.time,'sleep',MagicMock(side_effect=Done()))
     with pytest.raises(Done):tg.monitor()
-    assert {call.kwargs['target'] for call in worker.call_args_list} == {tg.command_monitor, tg.online_monitor}
+    assert {call.kwargs['target'] for call in worker.call_args_list} == {tg.command_monitor, tg.online_monitor, tg.work_monitor}
     assert worker.call_args.kwargs['daemon'] is True
-    assert worker.return_value.start.call_count == 2
+    assert worker.return_value.start.call_count == 4
 
 
 def test_key_setup_rejects_changed_credential_target_before_any_ssh(state, monkeypatch):

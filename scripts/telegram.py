@@ -360,7 +360,8 @@ def setup_locked():
                 message = update.get('message', {})
                 chat = message.get('chat', {})
                 if chat.get('type') == 'private' and message.get('text') == '/start ' + nonce:
-                    settings = {'token': token, 'chat_id': str(chat['id']), 'bot_username': username}
+                    settings = {'token': token, 'chat_id': str(chat['id']), 'bot_username': username,
+                                'work_reminders': old.get('work_reminders', True)}
                     api(token, 'sendMessage', {'chat_id': settings['chat_id'], 'text': '✅ n8n alerts connected.\n\nNo workflows were enabled automatically. Run telegram on your VPS to choose one.'})
                     save_config(settings)
                     with closing(database()) as db:
@@ -391,7 +392,7 @@ def helper():
             print(f"{number}) {row['name']} | {'ON' if enabled else 'OFF'}")
         if not rows:
             print('No workflows yet. Import/create one first; none will be enabled automatically.')
-        print('s) Change bot token / reconnect chat\nt) Send a test message\nr) Toggle Telegram reboot controls\n0) Exit')
+        print('s) Change bot token / reconnect chat\nt) Send a test message\nr) Toggle Telegram reboot controls\nw) Toggle work reminders (Mon–Fri 09:30 UK)\n0) Exit')
         choice = input('Workflow number to toggle alerts: ').strip().lower()
         if choice in ('', '0'):
             return
@@ -403,6 +404,11 @@ def helper():
             inventory['telegram_reboot_enabled'] = not inventory.get('telegram_reboot_enabled', False)
             vps.save(inventory)
             print('Telegram reboot controls ' + ('ON' if inventory['telegram_reboot_enabled'] else 'OFF') + '. The n8n host is always excluded.')
+        elif choice == 'w':
+            saved = config()
+            saved['work_reminders'] = not saved.get('work_reminders', True)
+            save_config(saved)
+            print('Work reminders ' + ('ON' if saved['work_reminders'] else 'OFF') + '. Notes and task commands still work.')
         elif choice == 't':
             saved = config()
             api(saved['token'], 'sendMessage', {'chat_id': saved['chat_id'], 'text': '✅ n8n Telegram test. Failure alerts follow your selected workflows.'})
@@ -456,12 +462,26 @@ def online_monitor():
         time.sleep(5)
 
 
+def work_monitor(kind):
+    """AI capture and daily reminders never block the command or reboot workers."""
+    import work_tasks
+    while True:
+        try:
+            with closing(database()) as db:
+                tick = work_tasks.capture_tick if kind == 'capture' else work_tasks.reminder_tick
+                tick(db, config(), api)
+        except Exception as error:
+            print('Work checklist worker unavailable ('+type(error).__name__+'); retrying.', flush=True)
+        time.sleep(2)
+
+
 def status():
     import reboot_menu, vps
     settings = config()
     inventory = vps.load()
     print('Bot: @' + settings.get('bot_username', 'not recorded'))
     print('Telegram chat configured: ' + ('YES' if settings.get('token') and settings.get('chat_id') else 'NO'))
+    print('Work reminders: ' + ('ON' if settings.get('work_reminders', True) else 'OFF') + ' | Monday–Friday 09:30 Europe/London')
     print('Reboot controls: ' + ('ON' if inventory.get('telegram_reboot_enabled') else 'OFF (finish sudo vps-manage, or enable option r in sudo telegram)'))
     for server in inventory.get('servers', []):
         mode = 'n8n HOST: REBOOT BLOCKED' if vps.protected(server, inventory) else ('reboot key ready' if server.get('reboot_ready') and server.get('reboot_key_version') == vps.KEY_VERSION and (vps.KEYS/server['id']).is_file() and (vps.KEYS/(server['id']+'.known_hosts')).is_file() else 'reboot key NOT READY: run sudo vps-manage')
@@ -484,6 +504,8 @@ def monitor():
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     threading.Thread(target=command_monitor, name='telegram-commands', daemon=True).start()
     threading.Thread(target=online_monitor, name='telegram-reboot-readiness', daemon=True).start()
+    for kind in ('capture','reminders'):
+        threading.Thread(target=work_monitor, args=(kind,), name='telegram-work-'+kind, daemon=True).start()
     verified = False
     while True:
         try:

@@ -483,3 +483,32 @@ between rounds. It sends `<saved display name> online ✅` only after SSH return
 new kernel boot ID, not merely a ping response or an open TCP port. Pending checks
 survive monitoring-service restarts. If no new boot is confirmed within ten minutes,
 it reports that verification timed out. Notification retries never repeat a reboot.
+
+## AI work checklist in Telegram
+
+The existing private bot also accepts informal work notes as ordinary messages,
+including several actions in one message. It saves the original text privately,
+acknowledges receipt immediately, then uses the bridge's existing OpenAI API key
+and model to tidy and split the notes into tasks. AI only writes task wording;
+it cannot mark tasks complete, alter schedules or execute actions. If AI is
+unavailable, the bot keeps the original note lines as checklist items and says so.
+
+Outstanding tasks arrive **Monday–Friday at 09:30 Europe/London**, including UK
+summer-time changes. Nothing is sent for an empty checklist. Notes, task status,
+queued processing and daily delivery state live in the existing private Telegram
+SQLite database and are included in normal backups. A restart after the scheduled
+time can deliver that day's missed reminder once; earlier days are not replayed.
+
+Send `tasks` to view the current list, `done 1,3` to complete those stable task IDs,
+and `reopen 1` to restore an item. Completed items disappear from future reminders.
+Numbers are permanent IDs, so adding or completing another task never renumbers
+older messages. Reboot selections still use bare numbers; task commands require
+`done` or `reopen`. Sending work notes or a checklist expires an older open reboot
+menu, preventing a bare checklist number from rebooting a server accidentally.
+
+Use option **w** in `sudo telegram` to pause/resume the weekday reminders. Manual
+notes and task commands still work while reminders are paused. `telegram-status`
+shows the reminder schedule. Apply with `sudo update-live`; no new n8n workflow,
+credentials, Telegram setup or republish is required. All messages are restricted
+to the bot's bound private owner chat. Forwarded/group/other-user messages are
+ignored. No Stonewater data or API keys are written to the repository or logs.
