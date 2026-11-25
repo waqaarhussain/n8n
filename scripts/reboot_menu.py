@@ -195,7 +195,9 @@ def tick(db, settings, api, lock_path, now=None):
             db.execute('UPDATE bot_cursor SET offset=? WHERE id=1', (offset,))
             db.commit()
             try:
-                process(db, settings, update, api, now)
+                import work_tasks
+                if not work_tasks.handle(db, settings, update, api, now):
+                    process(db, settings, update, api, now)
             except Exception as error:
                 # A rejected message response must not discard the rest of this
                 # batch or pause all buttons for the alert retry interval.
