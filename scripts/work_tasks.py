@@ -53,15 +53,7 @@ def render(rows, heading='Work checklist'):
         '\n\nReply done 1,3 using the item numbers. Send tasks to view the list.'
 
 
-def close_reboot_menu(db, chat_id):
-    # A work checklist must never make a bare number select an older reboot menu.
-    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reboot_menus'").fetchone():
-        db.execute("UPDATE reboot_menus SET state='expired' WHERE chat_id=? AND state='open'", (str(chat_id),))
-        db.commit()
-
-
 def send_checklist(db, settings, api, heading='Work checklist'):
-    close_reboot_menu(db,settings['chat_id'])
     rows = checklist(db,settings['chat_id'])
     # Keep each Telegram message comfortably below its text limit.
     for offset in range(0,max(1,len(rows)),12):
@@ -99,7 +91,7 @@ def handle(db, settings, update, api, now=None):
              'tasks — outstanding list\ndone 1,3 — complete those task IDs\n'
              'reopen 1 — restore a completed task\n'
              'Daily checklist: Monday–Friday, 09:30 UK time.\n'
-             'reboot — separate VPS reboot menu.')
+             'pause / resume — stop or start weekday reminders.')
         return True
     match = re.fullmatch(r'/?(done|reopen)(?:\s+(.*))?',text)
     if match:
@@ -132,7 +124,6 @@ def handle(db, settings, update, api, now=None):
                        (str(settings['chat_id']),message['message_id'],raw)).rowcount
     db.commit()
     if added:
-        close_reboot_menu(db,settings['chat_id'])
         send(settings,api,'Notes saved. I’m tidying them into your work checklist…')
     return True
 

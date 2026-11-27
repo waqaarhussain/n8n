@@ -486,7 +486,7 @@ it reports that verification timed out. Notification retries never repeat a rebo
 
 ## AI work checklist in Telegram
 
-The existing private bot also accepts informal work notes as ordinary messages,
+A separate private work bot accepts informal work notes as ordinary messages,
 including several actions in one message. It saves the original text privately,
 acknowledges receipt immediately, then uses the bridge's existing OpenAI API key
 and model to tidy and split the notes into tasks. AI only writes task wording;
@@ -495,20 +495,35 @@ unavailable, the bot keeps the original note lines as checklist items and says s
 
 Outstanding tasks arrive **Monday–Friday at 09:30 Europe/London**, including UK
 summer-time changes. Nothing is sent for an empty checklist. Notes, task status,
-queued processing and daily delivery state live in the existing private Telegram
-SQLite database and are included in normal backups. A restart after the scheduled
+queued processing and daily delivery state live in `data/work-telegram.sqlite3`
+and are included in normal backups. This bot has its own token in
+`config/work-telegram.json`, service `n8n-work-bot.service`, update cursor and locks.
+The original bot retains VPS controls and workflow alerts; it no longer captures
+work notes or sends work reminders. A restart after the scheduled
 time can deliver that day's missed reminder once; earlier days are not replayed.
 
 Send `tasks` to view the current list, `done 1,3` to complete those stable task IDs,
 and `reopen 1` to restore an item. Completed items disappear from future reminders.
 Numbers are permanent IDs, so adding or completing another task never renumbers
-older messages. Reboot selections still use bare numbers; task commands require
-`done` or `reopen`. Sending work notes or a checklist expires an older open reboot
-menu, preventing a bare checklist number from rebooting a server accidentally.
+older messages. Task commands require `done` or `reopen`. The work bot has no reboot-command
+router and cannot execute VPS controls.
 
-Use option **w** in `sudo telegram` to pause/resume the weekday reminders. Manual
-notes and task commands still work while reminders are paused. `telegram-status`
-shows the reminder schedule. Apply with `sudo update-live`; no new n8n workflow,
-credentials, Telegram setup or republish is required. All messages are restricted
-to the bot's bound private owner chat. Forwarded/group/other-user messages are
-ignored. No Stonewater data or API keys are written to the repository or logs.
+Create a **new** bot with BotFather, then run:
+
+```bash
+sudo update-live
+sudo n8n-live work-bot
+```
+
+Enter the new token only at the hidden VPS prompt, open the printed private link,
+and press START. Setup refuses the existing VPS bot's token. Existing work tasks
+are copied once from the legacy shared database, preserving task IDs, completion
+status and reminder state. The legacy database remains untouched. Migration is
+restricted to the existing private owner, and preserves both bot configurations.
+
+Use `pause` / `resume` in the work bot to pause/resume weekday reminders. Manual
+notes and task commands still work while reminders are paused. Check connection
+and schedule with `sudo n8n-live work-bot-status`. No n8n workflow or republish is
+needed. The existing OpenAI configuration is reused. All messages are restricted
+to the work bot's bound private owner chat; forwarded/group/other-user messages
+are ignored. Notes and API keys are not written to the repository or logs.

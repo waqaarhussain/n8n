@@ -205,17 +205,6 @@ def test_ai_uses_existing_model_and_key_with_evidence_validation(monkeypatch):
     with pytest.raises(ValueError):extraction.extract_tasks({'ai':{'api_key':'private'}},'Supplier update')
 
 
-def test_work_notes_expire_an_old_reboot_selection_context(state):
-    import reboot_menu
-    db,calls,api=state
-    reboot_menu.init(db)
-    db.execute('INSERT INTO reboot_menus VALUES (?,?,?,?,?,?,?)',('old','123',77,'[]',NOW+300,'open','["server"]'))
-    db.commit()
-    tasks.handle(db,SETTINGS,message(),api,NOW)
-    assert db.execute('SELECT state FROM reboot_menus').fetchone()[0]=='expired'
-    assert not tasks.handle(db,SETTINGS,message('1',2),api,NOW)
-
-
 def test_large_lists_are_split_and_pending_processing_recovers(state):
     db,calls,api=state
     text='\n'.join('Action '+str(i) for i in range(20))
