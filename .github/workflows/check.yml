@@ -33,7 +33,7 @@ jobs:
           import telegram
           assert telegram.reboot_names(open('/tmp/vps-multi-execution.json').read()) == ['Server 1', 'Server 3']
           PYCODE
-      - run: bash -n bootstrap.sh install.sh scripts/n8n-live scripts/telegram-monitor.sh
+      - run: bash -n bootstrap.sh install.sh scripts/n8n-live scripts/telegram-monitor.sh scripts/work-bot-monitor.sh
       - run: POSTGRES_PASSWORD=test N8N_ENCRYPTION_KEY=test N8N_IMAGE=docker.n8n.io/n8nio/n8n:stable docker compose config --quiet
       - run: docker build -t school-bridge-test bridge
       - name: Verify task extraction module is shipped in the bridge image

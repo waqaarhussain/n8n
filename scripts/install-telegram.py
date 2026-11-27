@@ -30,10 +30,18 @@ def main():
     shutil.copyfile('scripts/telegram-monitor.sh', target)
     target.chmod(0o755)
     Path('/etc/systemd/system/n8n-telegram.service').write_text(UNIT)
+    work_target = Path('/usr/local/bin/n8n-work-bot-monitor')
+    shutil.copyfile('scripts/work-bot-monitor.sh', work_target)
+    work_target.chmod(0o755)
+    work_unit = UNIT.replace('n8n opt-in Telegram failure alerts', 'Private work checklist Telegram bot').replace('/usr/local/bin/n8n-telegram-monitor', '/usr/local/bin/n8n-work-bot-monitor')
+    Path('/etc/systemd/system/n8n-work-bot.service').write_text(work_unit)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
     subprocess.run(['systemctl', 'enable', 'n8n-telegram.service'], check=True)
     subprocess.run(['systemctl', 'restart', 'n8n-telegram.service'], check=True)
-    print('Telegram monitor installed. No new workflow subscriptions added.')
+    if Path('config/work-telegram.json').exists():
+        subprocess.run(['systemctl', 'enable', 'n8n-work-bot.service'], check=True)
+        subprocess.run(['systemctl', 'restart', 'n8n-work-bot.service'], check=True)
+    print('Telegram monitors installed. Configure the separate work bot with sudo n8n-live work-bot. No new workflow subscriptions added.')
 
 
 if __name__ == '__main__':
