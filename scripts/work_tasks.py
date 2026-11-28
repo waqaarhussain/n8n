@@ -71,8 +71,9 @@ def handle(db, settings, update, api, now=None):
         return False
     if message.get('forward_origin') or message.get('forward_date') or message.get('via_bot'):
         return False
-    if not now-120 <= message.get('date',0) <= now+30:
-        return False
+    # Owner notes may arrive after an outage; unlike reboots they must not be
+    # discarded due to transport delay or host clock differences. Stable IDs
+    # and the persisted input/update cursors make task commands idempotent.
     raw = message.get('text','').strip()
     text = raw.casefold()
     if not raw:

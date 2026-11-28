@@ -51,6 +51,10 @@ def init(db):
         id INTEGER PRIMARY KEY CHECK(id=1), offset INTEGER NOT NULL DEFAULT 0,
         last_poll REAL NOT NULL DEFAULT 0);
       INSERT OR IGNORE INTO work_bot_control(id) VALUES (1);
+      CREATE TABLE IF NOT EXISTS work_bot_health (
+        id INTEGER PRIMARY KEY CHECK(id=1), seen INTEGER NOT NULL DEFAULT 0,
+        rejected INTEGER NOT NULL DEFAULT 0, last_reason TEXT NOT NULL DEFAULT '');
+      INSERT OR IGNORE INTO work_bot_health(id) VALUES (1);
       CREATE TABLE IF NOT EXISTS work_bot_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     ''')
 
@@ -136,35 +140,49 @@ def setup():
         print('Matching START message not found yet. Use the exact link in your private owner chat.')
 
 
-def direct_owner(update, value, now):
+def rejection_reason(update, value):
     msg = update.get('message') or {}
-    return (msg.get('chat',{}).get('type')=='private'
-            and str(msg.get('chat',{}).get('id'))==str(value.get('chat_id'))
-            and str(msg.get('from',{}).get('id'))==str(value.get('chat_id'))
-            and not msg.get('from',{}).get('is_bot')
-            and not any(msg.get(k) for k in ('forward_origin','forward_date','via_bot'))
-            and now-120<=msg.get('date',0)<=now+30)
+    if not msg: return 'NO_TEXT_MESSAGE'
+    if msg.get('chat',{}).get('type')!='private': return 'NOT_PRIVATE'
+    if str(msg.get('chat',{}).get('id'))!=str(value.get('chat_id')): return 'CHAT_MISMATCH'
+    if str(msg.get('from',{}).get('id'))!=str(value.get('chat_id')): return 'SENDER_MISMATCH'
+    if msg.get('from',{}).get('is_bot'): return 'BOT_SENDER'
+    if any(msg.get(k) for k in ('forward_origin','forward_date','via_bot')): return 'FORWARDED'
+    return ''
+
+
+def direct_owner(update, value, now=None):
+    return not rejection_reason(update,value)
 
 
 def poll(db, value, api, now=None):
-    now = time.time() if now is None else now
     separate(value)
     init(db)
     offset = db.execute('SELECT offset FROM work_bot_control WHERE id=1').fetchone()[0]
     updates = api(value['token'],'getUpdates',{'offset':offset,'timeout':20,'limit':100,'allowed_updates':['message']})
-    db.execute('UPDATE work_bot_control SET last_poll=? WHERE id=1',(now,));db.commit()
+    # Record response time, not the time before a long-poll request started.
+    observed = time.time() if now is None else now
+    db.execute('UPDATE work_bot_control SET last_poll=? WHERE id=1',(observed,));db.commit()
     for update in updates:
         if update['update_id']<offset: continue
+        reason = rejection_reason(update,value)
+        if not reason:
+            text = update['message'].get('text','').strip().casefold()
+            if text in {'pause','resume','/pause','/resume'}:
+                value['work_reminders'] = text.lstrip('/')=='resume'
+                shared.save_config(value)
+                work_tasks.send(value,api,'Weekday reminders '+('ON' if value['work_reminders'] else 'OFF')+'. Notes and task commands still work.')
+            elif not work_tasks.handle(db,value,update,api,observed) and text:
+                work_tasks.send(value,api,'This bot is for work notes. Send tasks, done 1,3 or reopen 1. VPS controls are in your other bot.')
+            reason = 'OWNER_MESSAGE'
+        # Persist the cursor after processing. A crash must not silently discard
+        # an owner note. Capture deduplication and task commands tolerate replay.
         offset = update['update_id']+1
-        db.execute('UPDATE work_bot_control SET offset=? WHERE id=1',(offset,));db.commit()
-        if not direct_owner(update,value,now): continue
-        text = update['message'].get('text','').strip().casefold()
-        if text in {'pause','resume','/pause','/resume'}:
-            value['work_reminders'] = text.lstrip('/')=='resume'
-            shared.save_config(value)
-            work_tasks.send(value,api,'Weekday reminders '+('ON' if value['work_reminders'] else 'OFF')+'. Notes and task commands still work.')
-        elif not work_tasks.handle(db,value,update,api,now) and text:
-            work_tasks.send(value,api,'This bot is for work notes. Send tasks, done 1,3 or reopen 1. VPS controls are in your other bot.')
+        rejected = int(reason!='OWNER_MESSAGE')
+        db.execute('UPDATE work_bot_control SET offset=? WHERE id=1',(offset,))
+        db.execute('UPDATE work_bot_health SET seen=seen+1,rejected=rejected+?,last_reason=? WHERE id=1',(rejected,reason))
+        db.commit()
+        print('Work bot update processed ('+reason+').',flush=True)
 
 
 def worker(kind):
@@ -211,6 +229,11 @@ def status():
         with closing(shared.database()) as db:
             init(db)
             print('Outstanding tasks: '+str(len(work_tasks.checklist(db,value.get('chat_id','')))))
+            poll = db.execute('SELECT last_poll FROM work_bot_control WHERE id=1').fetchone()[0]
+            health = db.execute('SELECT * FROM work_bot_health WHERE id=1').fetchone()
+            print('Last poll: '+(str(round(max(0,time.time()-poll)))+' seconds ago' if poll else 'not recorded'))
+            print('Updates seen: '+str(health['seen'])+' | Rejected: '+str(health['rejected'])+' | Last: '+(health['last_reason'] or 'none'))
+            print('Note batches: '+str([tuple(r) for r in db.execute('SELECT state,count(*) FROM task_inputs GROUP BY state')]))
 
 
 def main():

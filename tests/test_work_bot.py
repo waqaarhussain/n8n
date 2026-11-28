@@ -158,3 +158,46 @@ def test_pause_only_updates_work_config_and_other_owners_are_ignored(state):
     assert json.loads(bot.CONFIG.read_text())['work_reminders'] is False
     assert bot.MAIN_CONFIG.read_bytes()==original
     assert len(sent)==1
+
+
+def test_queued_owner_notes_survive_old_or_future_telegram_timestamps(state):
+    db,_=state
+    items=[update('Delayed action'),update('Clock-skewed action',2)]
+    items[0]['message']['date']=NOW-86400
+    items[1]['message']['date']=NOW+3600
+    calls=[]
+    def api(token,method,payload):
+        if method=='getUpdates':return items
+        calls.append(payload);return {'message_id':10}
+    bot.poll(db,VALUE,api,NOW)
+    assert db.execute('SELECT count(*) FROM task_inputs').fetchone()[0]==2
+    assert len(calls)==2
+    assert db.execute('SELECT seen,rejected,last_reason FROM work_bot_health').fetchone()[:]==(2,0,'OWNER_MESSAGE')
+
+
+def test_failed_capture_does_not_advance_update_cursor(state,monkeypatch):
+    db,_=state
+    capture=MagicMock(side_effect=sqlite3.OperationalError('private-text'))
+    monkeypatch.setattr(tasks,'handle',capture)
+    api=MagicMock(return_value=[update('Meeting action',10)])
+    with pytest.raises(sqlite3.OperationalError):bot.poll(db,VALUE,api,NOW)
+    assert db.execute('SELECT offset FROM work_bot_control').fetchone()[0]==0
+
+
+def test_poll_health_uses_time_after_long_poll_response(state,monkeypatch):
+    db,_=state
+    clock=[100.0]
+    monkeypatch.setattr(bot.time,'time',lambda:clock[0])
+    def api(*args):clock[0]=145.0;return []
+    bot.poll(db,VALUE,api)
+    assert db.execute('SELECT last_poll FROM work_bot_control').fetchone()[0]==145.0
+
+
+def test_rejection_diagnostics_do_not_expose_notes_or_account_ids(state,capsys):
+    db,_=state
+    api=MagicMock(return_value=[update('private meeting details',1,999)])
+    bot.poll(db,VALUE,api,NOW)
+    output=capsys.readouterr().out
+    assert 'CHAT_MISMATCH' in output
+    assert 'private meeting details' not in output and '999' not in output
+    assert db.execute('SELECT rejected FROM work_bot_health').fetchone()[0]==1
