@@ -86,9 +86,9 @@ def test_duplicate_telegram_message_and_repeated_note_do_not_duplicate_tasks(sta
 @pytest.mark.parametrize('changes',[
     {'chat':{'id':999,'type':'private'}}, {'chat':{'id':123,'type':'group'}},
     {'from':{'id':999}}, {'from':{'id':123,'is_bot':True}},
-    {'date':NOW-121},{'date':NOW+31},{'forward_origin':{'type':'user'}},{'via_bot':{'id':1}},
+    {'forward_origin':{'type':'user'}},{'via_bot':{'id':1}},
 ])
-def test_only_fresh_direct_owner_messages_are_captured(state,changes):
+def test_only_direct_owner_messages_are_captured(state,changes):
     db,calls,api=state
     assert not tasks.handle(db,SETTINGS,message(**changes),api,NOW)
     assert db.execute('SELECT count(*) FROM task_inputs').fetchone()[0]==0
@@ -214,3 +214,11 @@ def test_large_lists_are_split_and_pending_processing_recovers(state):
     tasks.capture_tick(db,SETTINGS,api,NOW,draft)
     assert len(tasks.checklist(db,'123'))==20
     assert len(calls)==2 and all(len(p['text'])<4096 for p in calls)
+
+
+@pytest.mark.parametrize('date',[NOW-86400,NOW+3600])
+def test_owner_notes_are_not_lost_due_to_delivery_delay_or_clock_skew(state,date):
+    db,calls,api=state
+    assert tasks.handle(db,SETTINGS,message(date=date),api,NOW)
+    assert db.execute('SELECT text FROM task_inputs').fetchone()[0]==NOTES
+    assert calls[-1]['text'].startswith('Notes saved')

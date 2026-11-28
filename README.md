@@ -527,3 +527,11 @@ and schedule with `sudo n8n-live work-bot-status`. No n8n workflow or republish 
 needed. The existing OpenAI configuration is reused. All messages are restricted
 to the work bot's bound private owner chat; forwarded/group/other-user messages
 are ignored. Notes and API keys are not written to the repository or logs.
+
+Work-note capture accepts queued owner messages after downtime and does not use
+reboot-command timestamp limits. Owner/private-chat and forwarding checks remain.
+The work bot advances its update cursor only after processing, so capture errors
+can retry without losing notes; message deduplication prevents duplicate tasks.
+`sudo n8n-live work-bot-status` reports poll age, update/rejection counts and note
+batch states without exposing tokens, account IDs or task text. The service log
+records only fixed processing/rejection categories.
