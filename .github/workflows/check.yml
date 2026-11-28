@@ -38,7 +38,7 @@ jobs:
       - run: docker build -t school-bridge-test bridge
       - name: Verify task extraction module is shipped in the bridge image
         run: |
-          docker run --rm school-bridge-test python -c 'from task_extract import Drafts; assert Drafts.model_validate({"tasks": []}).tasks == []'
+          docker run --rm school-bridge-test python -c 'from task_extract import Drafts, Digest; assert Drafts.model_validate({"tasks": []}).tasks == []; assert Digest.model_json_schema()["additionalProperties"] is False'
       - name: Verify PDF, scanned PDF OCR and Word attachment extraction
         run: docker run --rm -v "$PWD/tests:/tests:ro" school-bridge-test python /tests/document_smoke.py
       - name: Verify stats pause, resume and reset in PostgreSQL

@@ -133,7 +133,7 @@ def setup():
                     db.execute('UPDATE work_bot_control SET offset=? WHERE id=1',(offset,));db.commit()
                 shared.save_config(value)
                 shared.api(token,'sendMessage',{'chat_id':value['chat_id'],
-                    'text':'Work bot connected ✅\nSend rough notes, tasks, done 1,3 or reopen 1.\nReminders: Monday–Friday 09:30 UK time.'})
+                    'text':'Work bot connected ✅\nSend rough notes or tasks. Use done or reopen followed by task numbers.\nReminders: Monday–Friday 09:30 UK time.'})
                 print('Work bot connected. Existing tasks preserved. The VPS bot is unchanged.')
                 return
             if len(updates)<100: break
@@ -173,7 +173,7 @@ def poll(db, value, api, now=None):
                 shared.save_config(value)
                 work_tasks.send(value,api,'Weekday reminders '+('ON' if value['work_reminders'] else 'OFF')+'. Notes and task commands still work.')
             elif not work_tasks.handle(db,value,update,api,observed) and text:
-                work_tasks.send(value,api,'This bot is for work notes. Send tasks, done 1,3 or reopen 1. VPS controls are in your other bot.')
+                work_tasks.send(value,api,'This bot is for work notes. Send tasks, or use done/reopen followed by task numbers. VPS controls are in your other bot.')
             reason = 'OWNER_MESSAGE'
         # Persist the cursor after processing. A crash must not silently discard
         # an owner note. Capture deduplication and task commands tolerate replay.
