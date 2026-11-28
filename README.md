@@ -502,7 +502,7 @@ The original bot retains VPS controls and workflow alerts; it no longer captures
 work notes or sends work reminders. A restart after the scheduled
 time can deliver that day's missed reminder once; earlier days are not replayed.
 
-Send `tasks` to view the current list, `done 1,3` to complete those stable task IDs,
+Send `tasks` to view the current list, `done 1,2` to complete those stable task IDs,
 and `reopen 1` to restore an item. Completed items disappear from future reminders.
 Numbers are permanent IDs, so adding or completing another task never renumbers
 older messages. Task commands require `done` or `reopen`. The work bot has no reboot-command
@@ -535,3 +535,18 @@ can retry without losing notes; message deduplication prevents duplicate tasks.
 `sudo n8n-live work-bot-status` reports poll age, update/rejection counts and note
 batch states without exposing tokens, account IDs or task text. The service log
 records only fixed processing/rejection categories.
+
+Work reminders also produce an AI briefing: a short natural-language overview
+and a clearly worded action for each unfinished task, using its saved original
+notes. Fuller notes produce more useful summaries; vague notes are kept vague
+without inventing people, urgency or deadlines. Task IDs and completion state are
+never changed by the summary model. Output missing an ID or lacking source
+evidence falls back to the complete saved checklist with an explicit notice.
+
+Briefings are cached privately by the exact active task content, so an unchanged
+list does not cause another model request on every reminder. Completing, reopening
+or adding tasks changes the cache key. A completion during AI processing discards
+the stale briefing before delivery. Manual `tasks`/completion replies remain fast
+using a matching cached briefing or the current plain checklist. The one-off test
+command uses the same AI briefing function as the weekday reminders. Completion
+examples are generated from the real IDs shown in each message.

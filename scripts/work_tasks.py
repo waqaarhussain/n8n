@@ -1,5 +1,6 @@
 """Private, owner-only AI task capture and weekday 09:30 UK checklists."""
 import json
+import hashlib
 import re
 import subprocess
 import sqlite3
@@ -26,6 +27,8 @@ def init(db):
         source_key TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0);
       CREATE UNIQUE INDEX IF NOT EXISTS open_work_task_source
         ON work_tasks(chat_id,source_key) WHERE completed=0;
+      CREATE TABLE IF NOT EXISTS work_digest_cache (
+        fingerprint TEXT PRIMARY KEY, payload TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS task_daily (
         chat_id TEXT NOT NULL, day TEXT NOT NULL, sent INTEGER NOT NULL DEFAULT 0,
         next_attempt REAL NOT NULL DEFAULT 0, PRIMARY KEY(chat_id,day));
@@ -46,18 +49,82 @@ def checklist(db, chat_id, completed=False):
                       (str(chat_id),int(completed))).fetchall()
 
 
-def render(rows, heading='Work checklist'):
+def render(rows, heading='Work checklist', digest=None):
     if not rows:
         return heading+'\nNothing outstanding ✅'
-    return heading+'\n\n'+'\n'.join(str(r['id'])+'. ☐ '+r['title'] for r in rows)+\
-        '\n\nReply done 1,3 using the item numbers. Send tasks to view the list.'
+    actions = {item['id']:item['text'] for item in digest['items']} if digest else {}
+    lines = [str(r['id'])+'. ☐ '+actions.get(r['id'],r['title']) for r in rows]
+    example = ','.join(str(r['id']) for r in rows[:2])
+    first = str(rows[0]['id'])
+    help_text = ('Reply done '+first+' to mark it complete.' if len(rows)==1 else
+                 'Reply done '+first+' or done '+example+' using the item numbers.')
+    overview = (digest['overview']+'\n\n') if digest else ''
+    return heading+'\n\n'+overview+'\n'.join(lines)+'\n\n'+help_text+' Send tasks to view the list.'
 
 
-def send_checklist(db, settings, api, heading='Work checklist'):
+def fingerprint(chat_id, rows):
+    value = {'chat':str(chat_id),'tasks':[{'id':r['id'],'title':r['title'],'source':r['source']} for r in rows]}
+    return hashlib.sha256(json.dumps(value,sort_keys=True).encode()).hexdigest()
+
+
+def summarise_digest(rows):
+    data = {'mode':'digest','tasks':[{'id':r['id'],'title':r['title'],'source':r['source']} for r in rows]}
+    result = subprocess.run(['docker','compose','exec','-T','school-bridge','python','task_extract.py'],
+                            input=json.dumps(data),text=True,check=True,stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,timeout=55)
+    return json.loads(result.stdout)
+
+
+def validate_digest(value, rows):
+    expected = {r['id']:r for r in rows}
+    if not isinstance(value,dict) or set(value)!={'overview','items'}: raise ValueError('Invalid summary')
+    if not isinstance(value['overview'],str) or not 1<=len(value['overview'].strip())<=600: raise ValueError('Invalid overview')
+    items = value['items']
+    if not isinstance(items,list) or len(items)!=len(rows): raise ValueError('Missing summary items')
+    ids = []
+    for item in items:
+        if not isinstance(item,dict) or set(item)!={'id','text','source'}: raise ValueError('Invalid item')
+        identity = item['id']
+        if type(identity) is not int or identity not in expected: raise ValueError('Unknown task')
+        if not isinstance(item['text'],str) or not 1<=len(item['text'].strip())<=250: raise ValueError('Invalid action')
+        if not isinstance(item['source'],str) or not item['source'].strip() or item['source'] not in expected[identity]['source']: raise ValueError('Invalid evidence')
+        item['text'] = re.sub(r'\s+',' ',item['text']).strip()
+        ids.append(identity)
+    if len(set(ids))!=len(ids): raise ValueError('Duplicate task')
+    return value
+
+
+def send_checklist(db, settings, api, heading='Work checklist', ai_summary=True):
+    init(db)
     rows = checklist(db,settings['chat_id'])
-    # Keep each Telegram message comfortably below its text limit.
-    for offset in range(0,max(1,len(rows)),12):
-        send(settings,api,render(rows[offset:offset+12],heading))
+    snapshot = fingerprint(settings['chat_id'],rows)
+    messages = []
+    for offset in range(0,max(1,len(rows)),8):
+        batch = rows[offset:offset+8]
+        digest = None
+        cache_key = fingerprint(settings['chat_id'],batch)
+        cached = db.execute('SELECT payload FROM work_digest_cache WHERE fingerprint=?',(cache_key,)).fetchone()
+        try:
+            if cached:
+                digest = validate_digest(json.loads(cached['payload']),batch)
+            elif batch and ai_summary:
+                digest = validate_digest(summarise_digest(batch),batch)
+                db.execute('INSERT OR REPLACE INTO work_digest_cache VALUES (?,?)',(cache_key,json.dumps(digest)))
+                db.commit()
+        except Exception:
+            digest = None
+        text = render(batch,heading,digest)
+        if batch and ai_summary and digest is None:
+            text = text.replace(heading+'\n\n',heading+'\n\nAI summary unavailable. Here is your saved checklist.\n\n',1)
+        messages.append(text)
+    # A task can be completed while the AI request is in flight. Never send the
+    # old summary or old checklist after the active set has changed.
+    current = checklist(db,settings['chat_id'])
+    if fingerprint(settings['chat_id'],current)!=snapshot:
+        if not current: return
+        messages = [render(current[i:i+8],heading) for i in range(0,max(1,len(current)),8)]
+    for text in messages:
+        send(settings,api,text)
 
 
 def handle(db, settings, update, api, now=None):
@@ -85,20 +152,20 @@ def handle(db, settings, update, api, now=None):
         return False
     init(db)
     if text in {'tasks','todo','/tasks','/todo'}:
-        send_checklist(db,settings,api)
+        send_checklist(db,settings,api,ai_summary=False)
         return True
     if text in {'help','/help','/start'}:
         send(settings,api,'Send rough work notes to add tasks. AI tidies the wording.\n'
-             'tasks — outstanding list\ndone 1,3 — complete those task IDs\n'
-             'reopen 1 — restore a completed task\n'
+             'tasks: outstanding list\ndone followed by task numbers: complete those tasks\n'
+             'reopen followed by a task number: restore that task\n'
              'Daily checklist: Monday–Friday, 09:30 UK time.\n'
-             'pause / resume — stop or start weekday reminders.')
+             'pause / resume: stop or start weekday reminders.')
         return True
     match = re.fullmatch(r'/?(done|reopen)(?:\s+(.*))?',text)
     if match:
         ids_text = match.group(2) or ''
         if len(ids_text)>512 or not re.fullmatch(r'[0-9]+(?:\s*,\s*[0-9]+)*',ids_text):
-            send(settings,api,'Use done 1,3 or reopen 1 with the task numbers shown in your checklist.')
+            send(settings,api,'Use done or reopen followed by the task numbers shown in your checklist, separated by commas.')
             return True
         ids = sorted({int(x.strip()) for x in ids_text.split(',')})
         rows = db.execute('SELECT * FROM work_tasks WHERE chat_id=? AND id IN ('+','.join('?' for _ in ids)+')',
@@ -116,7 +183,7 @@ def handle(db, settings, update, api, now=None):
             send(settings,api,'A matching task is already open. Nothing changed; send tasks to check the list.')
             return True
         send(settings,api,('Completed ✅ ' if completing else 'Reopened: ')+', '.join(map(str,ids)))
-        send_checklist(db,settings,api)
+        send_checklist(db,settings,api,ai_summary=False)
         return True
     if len(raw)>MAX_NOTES or len([x for x in raw.splitlines() if x.strip()])>30:
         send(settings,api,'Please split your notes into messages of up to 4,000 characters and 30 lines.')
@@ -194,7 +261,7 @@ def reminder_tick(db, settings, api, now=None):
     db.commit()
     if checklist(db,chat):
         try:
-            send_checklist(db,settings,api,'Work checklist • '+local.strftime('%a %d %b'))
+            send_checklist(db,settings,api,'Your work briefing • '+local.strftime('%a %d %b'))
         except TelegramError as error:
             db.execute('UPDATE task_daily SET next_attempt=? WHERE chat_id=? AND day=?',(now+max(30,error.retry_after),chat,day))
             db.commit()

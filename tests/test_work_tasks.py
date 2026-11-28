@@ -23,6 +23,8 @@ def message(text=NOTES, number=1, **changes):
 def state(tmp_path,monkeypatch):
     monkeypatch.setattr(tg,'STATE',tmp_path/'tasks.sqlite3')
     db=tg.database();tasks.init(db)
+    monkeypatch.setattr(tasks,'summarise_digest',lambda rows:{'overview':'Your outstanding actions are listed below.',
+        'items':[{'id':r['id'],'text':r['title'],'source':r['source']} for r in rows]})
     calls=[]
     def api(token,method,payload):
         assert token==SETTINGS['token'] and method=='sendMessage'
@@ -213,7 +215,7 @@ def test_large_lists_are_split_and_pending_processing_recovers(state):
     calls.clear()
     tasks.capture_tick(db,SETTINGS,api,NOW,draft)
     assert len(tasks.checklist(db,'123'))==20
-    assert len(calls)==2 and all(len(p['text'])<4096 for p in calls)
+    assert len(calls)==3 and all(len(p['text'])<4096 for p in calls)
 
 
 @pytest.mark.parametrize('date',[NOW-86400,NOW+3600])
@@ -222,3 +224,105 @@ def test_owner_notes_are_not_lost_due_to_delivery_delay_or_clock_skew(state,date
     assert tasks.handle(db,SETTINGS,message(date=date),api,NOW)
     assert db.execute('SELECT text FROM task_inputs').fetchone()[0]==NOTES
     assert calls[-1]['text'].startswith('Notes saved')
+
+
+def test_completion_hint_uses_visible_stable_ids_not_a_fixed_example(state):
+    db,calls,api=state
+    capture(state)
+    rows=tasks.checklist(db,'123')
+    text=tasks.render(rows[:2])
+    assert 'done 1,2' in text and 'done 1,3' not in text
+    text=tasks.render(rows[1:2])
+    assert 'Reply done 2 to mark it complete.' in text and 'done 1' not in text
+    text=tasks.render([rows[0],rows[2]])
+    assert 'done 1,3' in text
+
+
+def test_ai_briefing_preserves_detail_and_is_cached_for_unchanged_tasks(state,monkeypatch):
+    db,calls,api=state
+    capture(state,'fill supplier spreadsheet for Alex\ncheck eSIMs')
+    db.execute('DELETE FROM work_digest_cache');db.commit();calls.clear()
+    def digest(rows):
+        assert rows[0]['source']=='fill supplier spreadsheet for Alex'
+        return {'overview':'Complete the supplier spreadsheet for Alex and check the eSIMs.',
+                'items':[{'id':rows[0]['id'],'text':'Complete the supplier spreadsheet for Alex.','source':rows[0]['source']},
+                         {'id':rows[1]['id'],'text':'Check the eSIMs.','source':rows[1]['source']}]}
+    make=MagicMock(side_effect=digest);monkeypatch.setattr(tasks,'summarise_digest',make)
+    tasks.send_checklist(db,SETTINGS,api,'Test reminder')
+    assert 'Complete the supplier spreadsheet for Alex and check the eSIMs.' in calls[-1]['text']
+    assert '1. ☐ Complete the supplier spreadsheet for Alex.' in calls[-1]['text']
+    tasks.send_checklist(db,SETTINGS,api,'Next reminder')
+    make.assert_called_once()
+    assert 'Next reminder' in calls[-1]['text']
+
+
+def test_summary_cache_never_reintroduces_completed_tasks(state,monkeypatch):
+    db,calls,api=state
+    rows=capture(state)
+    db.execute('UPDATE work_tasks SET completed=1 WHERE id=?',(rows[0]['id'],));db.commit()
+    seen=[]
+    def digest(rows):
+        seen.extend(r['id'] for r in rows)
+        return {'overview':'Check the remaining actions.','items':[{'id':r['id'],'text':r['title'],'source':r['source']} for r in rows]}
+    monkeypatch.setattr(tasks,'summarise_digest',digest)
+    tasks.send_checklist(db,SETTINGS,api)
+    assert rows[0]['id'] not in seen and 'Alex' not in calls[-1]['text']
+
+
+def test_completing_task_during_ai_request_discards_stale_summary(state,monkeypatch):
+    db,calls,api=state
+    capture(state)
+    db.execute('DELETE FROM work_digest_cache');db.commit()
+    def digest(rows):
+        db.execute('UPDATE work_tasks SET completed=1 WHERE id=1');db.commit()
+        return {'overview':'STALE mention of completed action','items':[{'id':r['id'],'text':r['title'],'source':r['source']} for r in rows]}
+    monkeypatch.setattr(tasks,'summarise_digest',digest)
+    tasks.send_checklist(db,SETTINGS,api)
+    assert 'STALE' not in calls[-1]['text'] and 'Alex' not in calls[-1]['text']
+    assert 'Supplier update' in calls[-1]['text']
+
+
+@pytest.mark.parametrize('bad', ['unknown_id','missing_item','wrong_source'])
+def test_bad_ai_summary_falls_back_without_losing_task_items(state,monkeypatch,bad):
+    db,calls,api=state
+    capture(state)
+    db.execute('DELETE FROM work_digest_cache');db.commit()
+    def digest(rows):
+        items=[{'id':r['id'],'text':r['title'],'source':r['source']} for r in rows]
+        if bad=='unknown_id':items[0]['id']=999
+        if bad=='missing_item':items.pop()
+        if bad=='wrong_source':items[0]['source']='not supplied'
+        return {'overview':'Invented summary','items':items}
+    monkeypatch.setattr(tasks,'summarise_digest',digest)
+    tasks.send_checklist(db,SETTINGS,api)
+    text=calls[-1]['text']
+    assert 'Invented summary' not in text and 'AI summary unavailable' in text
+    assert all(line in text for line in NOTES.splitlines())
+
+
+def test_manual_list_does_not_block_on_new_ai_request(state,monkeypatch):
+    db,calls,api=state
+    capture(state)
+    db.execute('DELETE FROM work_digest_cache');db.commit()
+    make=MagicMock();monkeypatch.setattr(tasks,'summarise_digest',make)
+    tasks.handle(db,SETTINGS,message('tasks',2),api,NOW)
+    make.assert_not_called()
+    assert 'Supplier update' in calls[-1]['text']
+
+
+def test_model_briefing_requires_all_supplied_ids_and_source_evidence(monkeypatch):
+    data=[{'id':2,'title':'Supplier update','source':'ask Alex for supplier update'}]
+    response=MagicMock()
+    value={'overview':'Ask Alex for the supplier update.',
+           'items':[{'id':2,'text':'Ask Alex for the supplier update.','source':data[0]['source']}]}
+    response.json.return_value={'choices':[{'message':{'content':json.dumps(value)}}]}
+    client=MagicMock();client.__enter__.return_value.post.return_value=response
+    monkeypatch.setattr(extraction.httpx,'Client',MagicMock(return_value=client))
+    result=extraction.summarise_tasks({'ai':{'api_key':'private','model':'existing-model'}},data)
+    assert result==value
+    post=client.__enter__.return_value.post.call_args.kwargs
+    assert post['json']['model']=='existing-model'
+    assert json.loads(post['json']['messages'][1]['content'])==data
+    value['items'][0]['id']=3
+    response.json.return_value={'choices':[{'message':{'content':json.dumps(value)}}]}
+    with pytest.raises(ValueError):extraction.summarise_tasks({'ai':{'api_key':'private'}},data)
